@@ -230,24 +230,56 @@ forever:
 	mov x+0, ADC_L
 	
 	; Convert to voltage by multiplying by 5.000 and dividing by 4096
-	Load_y(5000)
+	;Load_y(5000)
+	;lcall mul32
+	;Load_y(4096)
+	;lcall div32
+	
+ 	;Load_y(1000) 
+ 	;lcall mul32
+	;Load_y(12300) 
+ 	;lcall div32
+
+ 	;Load_y(22) 
+ 	;lcall add32
+
+	; Read the 2.08V LM4040 voltage connected to AIN0 on pin 6
+	anl ADCCON0, #0xF0
+	orl ADCCON0, #0x00 ; Select channel 0
+
+	lcall Read_ADC
+	; Save result for later use
+	mov VAL_LM4040+0, R0
+	mov VAL_LM4040+1, R1
+
+	; Read the signal connected to AIN7
+	anl ADCCON0, #0xF0
+	orl ADCCON0, #0x07 ; Select channel 7
+	lcall Read_ADC
+    
+    ; Convert to voltage
+	mov x+0, R0
+	mov x+1, R1
+	; Pad other bits with zero
+	mov x+2, #0
+	mov x+3, #0
+	Load_y(40959) ; The MEASURED voltage reference: 4.0959V, with 4 decimal places
 	lcall mul32
-	Load_y(4096)
+	; Retrive the ADC LM4040 value
+	mov y+0, VAL_LM4040+0
+	mov y+1, VAL_LM4040+1
+	; Pad other bits with zero
+	mov y+2, #0
+	mov y+3, #0
 	lcall div32
 	
- 	Load_y(1000) 
- 	lcall mul32
-	Load_y(12300) 
- 	lcall div32
-
- 	Load_y(22) 
- 	lcall add32
-
+	; Convert to BCD and display
 	lcall hex2bcd
 	lcall Display_Voltage_7seg
 	lcall Display_Voltage_LCD
 	lcall Display_Voltage_Serial
 
+	; Wait 250 ms between conversions
 	lcall Wait50ms
 	lcall Wait50ms
 	lcall Wait50ms
