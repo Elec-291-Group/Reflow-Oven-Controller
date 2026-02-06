@@ -83,6 +83,9 @@ start_signal: dbit 1
 
 Key1_flag: dbit 1
 
+tc_missing_abort: dbit 1   ; 1 = abort because temp < 50C after 60s
+tc_startup_window: dbit 1   ; 1 = still within first 60 seconds of the run
+
 ; ---------------------------------------------------------------------------------------------;
 cseg
 CLK            EQU 33333333 ; Microcontroller system crystal frequency in Hz
@@ -697,8 +700,71 @@ Copy4_Loop:
     inc  R1
     djnz R2, Copy4_Loop
     ret
-;===============================================================================
+;=========================================================
 
+;=========================================================
+; Abort condition safety check Temperature time
+;
+; PURPOSE:
+;   Automatic cycle termination on error:
+;   Abort if oven fails to reach at least 50C in first 60s.
+;
+; TRIP CONDITION:
+;   if (current_time >= 60s) AND (current_temp < 50C)
+;       -> set tc_missing_fault
+;       -> set stop_signal
+;
+; ASSUMPTIONS:
+;   - current_time is in SECONDS (32-bit, little-endian)
+;   - current_temp is in DEGREES C (integer, 32-bit, little-endian)
+;
+;   the Load_Y constants accordingly.
+;=========================================================
 
+Safety_Check_TC:
+    push acc
+    push psw
+    push AR0
+    push AR1
+    push AR2
+
+    ; If already aborted or startup window closed, do nothing
+    jb   tc_missing_abort, Safety_TC_Done
+    jnb  tc_startup_window, Safety_TC_Done
+
+    ; Check: current_time >= 60 ?
+    mov  R0, #current_time
+    mov  R1, #x
+    lcall Copy4_Bytes_R0_to_R1
+
+    Load_Y(60)
+    lcall x_lt_y
+    jb   mf, Safety_TC_Done        ; still < 60s → keep waiting
+
+    ; We reached 60s: close the startup window so it won't re-check later
+    clr  tc_startup_window
+
+    ; Now check: current_temp < 50 ?
+    mov  R0, #current_temp
+    mov  R1, #x
+    lcall Copy4_Bytes_R0_to_R1
+
+    Load_Y(50)
+    lcall x_lt_y
+    jnb  mf, Safety_TC_Done        ; temp >= 50 → pass
+
+    ; FAIL: at 60s, still below 50C → abort
+    setb tc_missing_abort
+    setb stop_signal
+    clr  PWM_OUT
+
+Safety_TC_Done:
+    pop  AR2
+    pop  AR1
+    pop  AR0
+    pop  psw
+    pop  acc
+    ret
+;=================================================================================
 
 END
