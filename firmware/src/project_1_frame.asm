@@ -505,4 +505,200 @@ end_pwm_generator:
 	ret
 
 ;-------------------------------------------------------------------------------
+
+;===============================================================================
+; Temp_Compare
+;
+; PURPOSE:
+;   Compare the current measured temperature against
+;   the soak and reflow temperature setpoints.
+;
+; BEHAVIOR:
+;   - If current_temp >= soak_temp   if soak_temp_reached   = 1
+;   - If current_temp >= reflow_temp if reflow_temp_reached = 1
+;
+; NOTES:
+;   - Uses 32-bit UNSIGNED comparison from math32.asm
+;   - Comparison is done by:
+;       x < y ?   (mf = 1)  if NOT reached
+;       x >= y ?  (mf = 0)  if reached
+;   - This routine ONLY SETS flags.
+;     Clearing flags must be handled by the FSM.
+;
+; EXPECTED VARIABLES (DSEG / BSEG):
+;   current_temp[4], soak_temp[4], reflow_temp[4]
+;   x[4], y[4]
+;   mf (math32 compare flag)
+;   soak_temp_reached, reflow_temp_reached
+;=========================================================
+Temp_Compare:
+    push acc
+    push psw
+    push AR0
+    push AR1
+    push AR2
+
+    ;-----------------------------------------------------
+    ; Check: current_temp >= soak_temp ?
+    ;-----------------------------------------------------
+
+    ; Copy current_temp of x (math32 operand A)
+    mov  R0, #current_temp
+    mov  R1, #x
+    lcall Copy4_Bytes_R0_to_R1
+
+    ; Copy soak_temp of y (math32 operand B)
+    mov  R0, #soak_temp
+    mov  R1, #y
+    lcall Copy4_Bytes_R0_to_R1
+
+    ; Perform x < y comparison
+    ; mf = 1 if current_temp < soak_temp  (NOT reached)
+    ; mf = 0 if current_temp >= soak_temp (REACHED)
+    lcall x_lt_y
+    jb   mf, Temp_Soak_NotReached
+    setb soak_temp_reached
+
+Temp_Soak_NotReached:
+
+    ;-----------------------------------------------------
+    ; Check: current_temp >= reflow_temp ?
+    ;-----------------------------------------------------
+
+    ; Copy current_temp of x
+    mov  R0, #current_temp
+    mov  R1, #x
+    lcall Copy4_Bytes_R0_to_R1
+
+    ; Copy reflow_temp of y
+    mov  R0, #reflow_temp
+    mov  R1, #y
+    lcall Copy4_Bytes_R0_to_R1
+
+    ; Compare x < y again
+    lcall x_lt_y
+    jb   mf, Temp_Reflow_NotReached
+    setb reflow_temp_reached
+
+Temp_Reflow_NotReached:
+
+    pop  AR2
+    pop  AR1
+    pop  AR0
+    pop  psw
+    pop  acc
+    ret
+
+
+;=========================================================
+; Time_Compare
+;
+; PURPOSE:
+;   Compare the elapsed time against soak and reflow
+;   time limits.
+;
+; BEHAVIOR:
+;   - If current_time >= soak_time   if soak_time_reached   = 1
+;   - If current_time >= reflow_time if reflow_time_reached = 1
+;
+; NOTES:
+;   - Time values are treated as 32-bit UNSIGNED numbers
+;     (e.g., milliseconds or seconds).
+;   - Uses the SAME compare logic as Temp_Compare.
+;   - This routine ONLY SETS flags.
+;
+; EXPECTED VARIABLES:
+;   current_time[4], soak_time[4], reflow_time[4]
+;   x[4], y[4]
+;   mf, soak_time_reached, reflow_time_reached
+;=========================================================
+Time_Compare:
+    push acc
+    push psw
+    push AR0
+    push AR1
+    push AR2
+
+    ;-----------------------------------------------------
+    ; Check: current_time >= soak_time ?
+    ;-----------------------------------------------------
+
+    ; Copy current_time of x
+    mov  R0, #current_time
+    mov  R1, #x
+    lcall Copy4_Bytes_R0_to_R1
+
+    ; Copy soak_time of y
+    mov  R0, #soak_time
+    mov  R1, #y
+    lcall Copy4_Bytes_R0_to_R1
+
+    ; Compare elapsed time vs soak time
+    lcall x_lt_y
+    jb   mf, Time_Soak_NotReached
+    setb soak_time_reached
+
+Time_Soak_NotReached:
+
+    ;-----------------------------------------------------
+    ; Check: current_time >= reflow_time ?
+    ;-----------------------------------------------------
+
+    ; Copy current_time of x
+    mov  R0, #current_time
+    mov  R1, #x
+    lcall Copy4_Bytes_R0_to_R1
+
+    ; Copy reflow_time of y
+    mov  R0, #reflow_time
+    mov  R1, #y
+    lcall Copy4_Bytes_R0_to_R1
+
+    ; Compare elapsed time vs reflow time
+    lcall x_lt_y
+    jb   mf, Time_Reflow_NotReached
+    setb reflow_time_reached
+
+Time_Reflow_NotReached:
+
+    pop  AR2
+    pop  AR1
+    pop  AR0
+    pop  psw
+    pop  acc
+    ret
+
+
+;=========================================================
+; Copy4_Bytes_R0_to_R1
+;
+; PURPOSE:
+;   Utility routine to copy a 32-bit value (4 bytes)
+;   from one memory location to another.
+;
+; INPUTS:
+;   R0 st source address
+;   R1 at destination address
+;
+; USES:
+;   R2 as loop counter
+;
+; EXAMPLE:
+;   mov R0, #current_temp
+;   mov R1, #x
+;   lcall Copy4_Bytes_R0_to_R1
+;=========================================================
+Copy4_Bytes_R0_to_R1:
+    mov  R2, #4
+Copy4_Loop:
+    mov  a, @R0
+    mov  @R1, a
+    inc  R0
+    inc  R1
+    djnz R2, Copy4_Loop
+    ret
+;===============================================================================
+
+
+
 END
