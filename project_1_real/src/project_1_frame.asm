@@ -228,6 +228,9 @@ Timer2_Init:
 
 ; ISR for timer 2.  Runs every 1 ms ;
 Timer2_ISR:
+	push acc
+	push psw
+
 	clr TF2  ; Timer 2 doesn't clear TF2 automatically. Do it in ISR
 	cpl P1.1 ; To check the interrupt rate with oscilloscope. It must be precisely a 1 ms pulse.
 
@@ -323,7 +326,7 @@ LCD_Display_Update_func:
 	mov a, Control_FSM_state
 
 LCD_Display_Update_0:
-	cjne a, #0, LCD_Display_Update_0
+	cjne a, #0, LCD_Display_Update_1
 	Set_Cursor(1,1)
 	Send_Constant_String(#String_state0_1)
 	Set_Cursor(2,1)
@@ -534,10 +537,6 @@ main:
 	; -------------------------------------------------------------------;
 	; Initialization
     mov SP, #0x7F
-    lcall Timer0_Init
-    lcall Timer2_Init
-	lcall ELCD_4BIT
-	lcall Initialize_Serial_Port
 
 	; We use the pins of P0 to control the LCD.  Configure as outputs.
     mov P0MOD, #01111111b ; P0.0 to P0.6 are outputs.  ('1' makes the pin output)
@@ -556,18 +555,35 @@ main:
 	; FSM initial states
 	mov KEY1_DEB_state, #0
 	mov SEC_FSM_state, #0
-
+	mov Control_FSM_state, #0
 	; FSM timers initialization
 	mov KEY1_DEB_timer, #0
 	mov SEC_FSM_timer, #0
+	; time counters initialization
+	mov current_time_sec, #0
+	mov current_time_minute, #0
 
 	; Display initial message on LCD
 	Set_Cursor(1, 1)
     Send_Constant_String(#Initial_Message)
 
+	; Clear all the flags
 	clr PB0_flag
 	clr PB1_flag
 	clr PB2_flag
+	clr one_second_flag
+	clr config_finish_signal
+	clr soak_temp_reached
+	clr soak_time_reached
+	clr reflow_temp_reached
+	clr reflow_time_reached
+	clr cooling_temp_reached
+
+	lcall Timer0_Init
+    lcall Timer2_Init
+	lcall ELCD_4BIT
+	lcall Initialize_Serial_Port
+
 loop:
 	; Check the FSM for KEY1 debounce
 	lcall KEY1_DEB
