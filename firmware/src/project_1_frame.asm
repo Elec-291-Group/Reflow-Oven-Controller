@@ -363,7 +363,11 @@ main:
 	mov power_output+1, #02H
 	mov power_output, #0EEH ; (initilize to 750 for testing)
 
-;-----------------------------------------------------------------------------------------------;
+	; Initialize abort action condition
+	clr  tc_missing_abort
+    setb tc_startup_window
+    clr  stop_signal
+;---------------------------------------------------------
 
 loop:
 
