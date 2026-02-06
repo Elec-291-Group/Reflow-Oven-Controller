@@ -74,6 +74,9 @@ SEC_FSM_timer: ds 1
 
 KEY1_DEB_state: ds 1
 SEC_FSM_state: ds 1
+
+pwm_counter: ds 4 ; counter for pwm (0-1500)
+
 ; 47d bytes used
 ; ---------------------------------------------------------------------------------------------;
 
@@ -83,7 +86,7 @@ SEC_FSM_state: ds 1
 bseg
 mf:		dbit 1 ; math32 sign
 one_second_flag: dbit 1
-one_millisecond_flag: dbit 1 ; one_millisecond_flag for pwm signal
+one_millisecond_flag: dbit 0 ; one_millisecond_flag for pwm signal
 
 soak_temp_reached: dbit 1
 reflow_temp_reached: dbit 1
@@ -112,6 +115,8 @@ TIMER_1_RELOAD EQU (256-((2*CLK)/(12*32*BAUD)))
 
 TIMER2_RATE    EQU 1000     ; 1000Hz, for a timer tick of 1ms
 TIMER2_RELOAD  EQU ((65536-(CLK/(12*TIMER2_RATE))))
+
+PWM_PERIOD     EQU 1500 ; 1.5s period
 
 SOUND_OUT      EQU P1.5 ; Pin connected to the speaker
 
@@ -216,6 +221,8 @@ Timer2_ISR:
 	inc KEY1_DEB_timer
 	inc SEC_FSM_timer
 	
+	setb one_millisecond_flag ; set the one millisecond flag
+
 Timer2_ISR_done:
 	pop psw
 	pop acc
@@ -317,7 +324,7 @@ main:
 	; We use the pins of P0 to control the LCD.  Configure as outputs.
     mov P0MOD, #01111111b ; P0.0 to P0.6 are outputs.  ('1' makes the pin output)
     ; We use pins P1.5 and P1.1 as outputs also.  Configure accordingly.
-    mov P1MOD, #00100010b ; P1.5 and P1.1 are outputs
+    mov P1MOD, #00101010b ; P1.5, P1.1, P1.3 are outputs
     mov P2MOD, #0xff
     mov P3MOD, #0xff
 
@@ -341,7 +348,16 @@ main:
     Send_Constant_String(#Initial_Message)
 
 	; Initialize counter to zero
-    
+    mov pwm_counter, #0
+	mov pwm_counter+1, #0
+	mov pwm_counter+2, #0
+	mov pwm_counter+3, #0
+
+	; Initialize power output
+	mov power_output, #0
+	mov power_output, #0
+	mov power_output, #02H
+	mov power_output, #0EEH ; (initilize to 750 for testing)
 	; -------------------------------------------------------------------;
 
 loop:
@@ -419,6 +435,12 @@ IncCurrentTimeSec:
 SEC_FSM_done:
 ;-------------------------------------------------------------------------------
 
+	jnb one_millisecond_flag, not_handle_pwm
+	lcall pwm_wave_generator ; call pwm generator only when 1 ms flag is triggered
+
+	setb LEDRA.5
+
+not_handle_pwm:
 	ljmp loop
 
 
@@ -430,6 +452,52 @@ SEC_FSM_done:
 ; used buffers: x, y
 ;-----------------------------------
 pwm_wave_generator:
+	clr one_millisecond_flag
+	; move pwm counter value into x for comparison purpose
+	mov x, pwm_counter
+	mov x+1, pwm_counter+1
+	mov x+2, pwm_counter+2
+	mov x+3, pwm_counter+3
 
+	Load_Y(1499)
+
+	; compare x(pwm_counter) and y(1499) if x=y, wrap x back to 0; else increase x by 1
+	lcall x_eq_y
+	jb mf, wrap_pwm_counter
+	; x not equal 1499, increment by 1
+	Load_Y(1)
+	lcall add32
+	sjmp set_pwm
+
+wrap_pwm_counter:
+	; x equal 1499, wrap to 0
+	Load_X(0)
+
+set_pwm:
+	; compare with power_output, if pwm counter smaller than power_output, set pwm pin high; else set pwm pin low
+	; load y with power output value
+	mov y, power_output
+	mov y+1, power_output+1
+	mov y+2, power_output+2
+	mov y+3, power_output+3
+
+	; compare x(pwm counter) with y(power output)
+	lcall x_lt_y
+	jb mf, set_pwm_high ; set pwm pin high if pwm counter smaller than power output
+	; set pwm pin low if pwm counter greater than power output
+	clr PWM_OUT
+	clr LEDRA.4
+	sjmp end_pwm_generator
+
+set_pwm_high:
+	setb PWM_OUT
+	setb LEDRA.4
+
+end_pwm_generator:
+	mov pwm_counter, x
+	mov pwm_counter+1, x+1
+	mov pwm_counter+2, x+2
+	mov pwm_counter+3, x+3
+	ret
 
 END
