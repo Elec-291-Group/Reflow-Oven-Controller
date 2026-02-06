@@ -711,7 +711,7 @@ Copy4_Loop:
 ;
 ; TRIP CONDITION:
 ;   if (current_time >= 60s) AND (current_temp < 50C)
-;       -> set tc_missing_fault
+;       -> set tc_missing_abort
 ;       -> set stop_signal
 ;
 ; ASSUMPTIONS:
