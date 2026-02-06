@@ -74,6 +74,7 @@ SEC_FSM_timer: ds 1
 
 KEY1_DEB_state: ds 1
 SEC_FSM_state: ds 1
+T2_SUB_MS:     ds 1
 ; 47d bytes used
 ; ---------------------------------------------------------------------------------------------;
 
@@ -109,10 +110,11 @@ TIMER0_RELOAD  EQU ((65536-(CLK/(12*TIMER0_RATE)))) ; The prescaler in the CV-80
 
 TIMER_1_RELOAD EQU (256-((2*CLK)/(12*32*BAUD)))
 
-TIMER2_RATE    EQU 1000     ; 1000Hz, for a timer tick of 1ms
+TIMER2_RATE    EQU 20000    ; 20 kHz, for 50 us tick (10 kHz toggle)
 TIMER2_RELOAD  EQU ((65536-(CLK/(12*TIMER2_RATE))))
 
 SOUND_OUT      EQU P1.5 ; Pin connected to the speaker
+PWM_OUT        EQU P1.3 ; 10 kHz, 50% duty (Timer2 toggle)
 
 ; These 'equ' must match the wiring between the DE10Lite board and the LCD!
 ; P0 is in connector JPIO.  Check "CV-8052 Soft Processor in the DE10Lite Board: Getting
@@ -132,7 +134,7 @@ Initial_Message:  db 'initial message', 0
 ; Timers Setting:
 ;   Timer 0: 2kHz square wave generation at P1.5 (speaker)
 ; 	Timer 1: Serial port baud rate 57600 generator
-;  	Timer 2: 1ms interrupt for BCD counter increment/decrement
+;  	Timer 2: 20 kHz interrupt for 10 kHz PWM output on P1.3
 ;----------------------------------------------------------------------------------------------;
 ; Routine to initialize the ISR for Timer 0 ;
 Timer0_Init:
@@ -204,14 +206,18 @@ Timer2_Init:
     setb TR2  ; Enable timer 2
 	ret
 
-; ISR for timer 2.  Runs every 1 ms ;
+; ISR for timer 2.  Runs every 50 us ;
 Timer2_ISR:
 	push acc
 	push psw
 	clr TF2  ; Timer 2 doesn't clear TF2 automatically. Do it in ISR
-	; cpl P1.1 ; Optional debug pin toggle for scope (ensure it's not used elsewhere)
+	cpl PWM_OUT ; 10 kHz, 50% duty (toggle every 50 us)
 
-; FSM states timers
+; FSM timers at 1 ms using 20 kHz tick
+	inc T2_SUB_MS
+	mov a, T2_SUB_MS
+	cjne a, #20, Timer2_ISR_done
+	mov T2_SUB_MS, #0
 	inc KEY1_DEB_timer
 	inc SEC_FSM_timer
 	
@@ -317,7 +323,7 @@ main:
 	; We use the pins of P0 to control the LCD.  Configure as outputs.
     mov P0MOD, #01111111b ; P0.0 to P0.6 are outputs.  ('1' makes the pin output)
     ; We use pins P1.5 and P1.1 as outputs also.  Configure accordingly.
-    mov P1MOD, #00100010b ; P1.5 and P1.1 are outputs
+    mov P1MOD, #00101010b ; P1.5, P1.3 and P1.1 are outputs
     mov P2MOD, #0xff
     mov P3MOD, #0xff
 
