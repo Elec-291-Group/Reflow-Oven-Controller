@@ -69,7 +69,7 @@ Control_FSM_state: ds 1
 bseg
 mf:		dbit 1 ; math32 sign
 one_second_flag: dbit 1
-one_millisecond_flag: dbit 0 ; one_millisecond_flag for pwm signal
+one_millisecond_flag: dbit 1 ; one_millisecond_flag for pwm signal
 
 soak_temp_reached: dbit 1
 reflow_temp_reached: dbit 1
@@ -472,16 +472,16 @@ IncCurrentTimeSec:
 	inc current_time_sec
 	cpl LEDRA.0 ; 1 Hz heartbeat LED
 SEC_FSM_done:
-	jnb one_millisecond_flag, not_handle_pwm
-	lcall pwm_wave_generator ; call pwm generator only when 1 ms flag is triggered
-	setb LEDRA.5
-not_handle_pwm:
-	ljmp loop
+	ret
 
 ;-------------------------------------------------------------------------------
 ; PWM
 ; generate pwm signal for the ssr ; 1.5s period for the pwm signal; with 1 watt 
 ; clarity for the pwm signal; input parameter: power_output; used buffers: x, y
+PWM_Wave: ; call pwm generator when 1 ms flag is triggered
+	jbc one_millisecond_flag, pwm_wave_generator
+	sjmp end_pwm_generator
+
 pwm_wave_generator:
 	clr one_millisecond_flag
 	clr mf
@@ -626,7 +626,6 @@ main:
     mov P1MOD, #00100010b ; P1.5 and P1.1 are outputs
     mov P2MOD, #0xff
     mov P3MOD, #0xff
-
     ; Turn off all the LEDs
     mov LEDRA, #0 ; LEDRA is bit addressable
     mov LEDRB, #0 ; LEDRB is NOT bit addresable
@@ -649,16 +648,11 @@ main:
 	mov pwm_counter+1, #0
 	mov pwm_counter+2, #0
 	mov pwm_counter+3, #0
-
 	; Initialize power output
 	mov power_output+3, #0
 	mov power_output+2, #0
 	mov power_output+1, #02H
 	mov power_output, #0EEH ; (initilize to 750 for testing)
-
-	; Display initial message on LCD
-	Set_Cursor(1, 1)
-    Send_Constant_String(#Initial_Message)
 
 	; Clear all the flags
 	clr PB0_flag
@@ -688,7 +682,10 @@ loop:
 	lcall Control_FSM
 
 	; Update the LCD display based on the current state
-	lcall LCD_Display_Update_func
+	;lcall LCD_Display_Update_func
+
+	; Update the pwm output for the ssr
+	lcall PWM_Wave 
 
 	; After initialization the program stays in this 'forever' loop
 	ljmp loop
