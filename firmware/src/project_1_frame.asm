@@ -60,6 +60,10 @@ Current_State:     ds 1
 
 ;-- UI buffers I added (ayaan)
 Cursor_Idx: ds 1
+btn0_cnt:  ds 1
+btn1_cnt:  ds 1
+btn2_cnt:  ds 1
+btn3_cnt:  ds 1
 
 ; These hold the TEXT (ASCII) safely
 ; Digits Only + Null Terminator, got rid of C,:, and s 
@@ -76,6 +80,7 @@ bseg
 mf:		dbit 1 ; math32 sign
 one_second_flag: dbit 1
 one_ms_pwm_flag: dbit 1 ; one_millisecond_flag for pwm signal
+one_ms_ui_flag: dbit 1  ; 1ms tick for non-blocking UI debounce
 
 soak_temp_reached: dbit 1
 reflow_temp_reached: dbit 1
@@ -92,6 +97,10 @@ config_finish_signal: dbit 1
 state_change_signal: dbit 1
 
 Key1_flag: dbit 1
+btn0_stable: dbit 1
+btn1_stable: dbit 1
+btn2_stable: dbit 1
+btn3_stable: dbit 1
 
 tc_missing_abort: dbit 1   ; 1 = abort because temp < 50C after 60s
 tc_startup_window: dbit 1   ; 1 = still within first 60 seconds of the run
@@ -115,6 +124,7 @@ TIMER2_RATE    EQU 1000     ; 1000Hz, for a timer tick of 1ms
 TIMER2_RELOAD  EQU ((65536-(CLK/(12*TIMER2_RATE))))
 
 PWM_PERIOD     EQU 1499 ; 1.5s period
+BTN_DB_MS      EQU 20   ; debounce time in ms
 
 SOUND_OUT      EQU P1.5 ; Pin connected to the speaker
 
@@ -906,9 +916,18 @@ main:
     ; P3: Col4(In)
     ; P3.0 (Col4) is In (0).
     mov P3MOD, #0x00
-    ; Turn off all the LEDs
+	; Turn off all the LEDs
     mov LEDRA, #0 ; LEDRA is bit addressable
     mov LEDRB, #0 ; LEDRB is NOT bit addresable
+    ; Initialize debounce state/counters (active-low buttons)
+    mov btn0_cnt, #0
+    mov btn1_cnt, #0
+    mov btn2_cnt, #0
+    mov btn3_cnt, #0
+    clr btn0_stable
+    clr btn1_stable
+    clr btn2_stable
+    clr btn3_stable
 
 	; Enable Global interrupts
     setb EA  
@@ -941,6 +960,7 @@ main:
 	clr PB1_flag
 	clr PB2_flag
 	clr one_second_flag
+	clr one_ms_ui_flag
 	clr config_finish_signal
 	clr soak_temp_reached
 	clr soak_time_reached
@@ -1093,43 +1113,134 @@ Parse_Time_String:
 ; MODULE: BUTTON HANDLER (Mode Selection)
 ; ----------------------------------------------------------------
 Check_Buttons:
-    jnb BTN_SOAK_TEMP, Btn_Soak_Temp_Press
-    jnb BTN_SOAK_TIME, Btn_Soak_Time_Press
-    jnb BTN_REFL_TEMP, Btn_Refl_Temp_Press
-    jnb BTN_REFL_TIME, Btn_Refl_Time_Press
+    ; Non-blocking 1ms debounce on active-low buttons (P0.0/2/4/6)
+    jbc one_ms_ui_flag, Check_Buttons_Tick
+    ret
+Check_Buttons_Tick:
+    mov A, P0
+    cpl A
+    anl A, #055h        ; pressed mask in even bits
+    mov R7, A
+
+    ; --- BTN_SOAK_TEMP (P0.0) ---
+    jb  btn0_stable, Btn0_StablePressed
+Btn0_StableReleased:
+    mov A, R7
+    jnb ACC.0, Btn0_Reset
+    inc btn0_cnt
+    mov A, btn0_cnt
+    cjne A, #BTN_DB_MS, Btn0_Done
+    setb btn0_stable
+    mov btn0_cnt, #0
+    sjmp Btn_Soak_Temp_Press
+Btn0_StablePressed:
+    mov A, R7
+    jb  ACC.0, Btn0_Reset
+    inc btn0_cnt
+    mov A, btn0_cnt
+    cjne A, #BTN_DB_MS, Btn0_Done
+    clr btn0_stable
+    mov btn0_cnt, #0
+    sjmp Btn0_Done
+Btn0_Reset:
+    mov btn0_cnt, #0
+Btn0_Done:
+
+    ; --- BTN_SOAK_TIME (P0.2) ---
+    jb  btn1_stable, Btn1_StablePressed
+Btn1_StableReleased:
+    mov A, R7
+    jnb ACC.2, Btn1_Reset
+    inc btn1_cnt
+    mov A, btn1_cnt
+    cjne A, #BTN_DB_MS, Btn1_Done
+    setb btn1_stable
+    mov btn1_cnt, #0
+    sjmp Btn_Soak_Time_Press
+Btn1_StablePressed:
+    mov A, R7
+    jb  ACC.2, Btn1_Reset
+    inc btn1_cnt
+    mov A, btn1_cnt
+    cjne A, #BTN_DB_MS, Btn1_Done
+    clr btn1_stable
+    mov btn1_cnt, #0
+    sjmp Btn1_Done
+Btn1_Reset:
+    mov btn1_cnt, #0
+Btn1_Done:
+
+    ; --- BTN_REFL_TEMP (P0.4) ---
+    jb  btn2_stable, Btn2_StablePressed
+Btn2_StableReleased:
+    mov A, R7
+    jnb ACC.4, Btn2_Reset
+    inc btn2_cnt
+    mov A, btn2_cnt
+    cjne A, #BTN_DB_MS, Btn2_Done
+    setb btn2_stable
+    mov btn2_cnt, #0
+    sjmp Btn_Refl_Temp_Press
+Btn2_StablePressed:
+    mov A, R7
+    jb  ACC.4, Btn2_Reset
+    inc btn2_cnt
+    mov A, btn2_cnt
+    cjne A, #BTN_DB_MS, Btn2_Done
+    clr btn2_stable
+    mov btn2_cnt, #0
+    sjmp Btn2_Done
+Btn2_Reset:
+    mov btn2_cnt, #0
+Btn2_Done:
+
+    ; --- BTN_REFL_TIME (P0.6) ---
+    jb  btn3_stable, Btn3_StablePressed
+Btn3_StableReleased:
+    mov A, R7
+    jnb ACC.6, Btn3_Reset
+    inc btn3_cnt
+    mov A, btn3_cnt
+    cjne A, #BTN_DB_MS, Btn3_Done
+    setb btn3_stable
+    mov btn3_cnt, #0
+    sjmp Btn_Refl_Time_Press
+Btn3_StablePressed:
+    mov A, R7
+    jb  ACC.6, Btn3_Reset
+    inc btn3_cnt
+    mov A, btn3_cnt
+    cjne A, #BTN_DB_MS, Btn3_Done
+    clr btn3_stable
+    mov btn3_cnt, #0
+    sjmp Btn3_Done
+Btn3_Reset:
+    mov btn3_cnt, #0
+Btn3_Done:
     ret
 
 Btn_Soak_Temp_Press:
-    lcall Wait_25ms
     mov Current_State, #1
     mov Cursor_Idx, #0
     sjmp Redraw_Screen
 
 Btn_Soak_Time_Press:
-    lcall Wait_25ms
     mov Current_State, #2
     mov Cursor_Idx, #0
     sjmp Redraw_Screen
 
 Btn_Refl_Temp_Press:
-    lcall Wait_25ms
     mov Current_State, #3
     mov Cursor_Idx, #0
     sjmp Redraw_Screen
 
 Btn_Refl_Time_Press:
-    lcall Wait_25ms
     mov Current_State, #4
     mov Cursor_Idx, #0
     sjmp Redraw_Screen
 
 Redraw_Screen:
     lcall Update_Screen_Full
-    ; Wait for button release
-    jnb BTN_SOAK_TEMP, $
-    jnb BTN_SOAK_TIME, $
-    jnb BTN_REFL_TEMP, $
-    jnb BTN_REFL_TIME, $
     ret
 
 ; ----------------------------------------------------------------
