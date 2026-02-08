@@ -252,10 +252,11 @@ forever:
 	lcall Display_Voltage_Serial
 
 	; Wait 250 ms between conversions
+	; Limit to 1 sample per second
+	mov R7,#20
+	delay_loop:
 	lcall Wait50ms
-	lcall Wait50ms
-	lcall Wait50ms
-	lcall Wait50ms
+	djnz R7, delay_loop
 	ljmp forever
 	
 end
