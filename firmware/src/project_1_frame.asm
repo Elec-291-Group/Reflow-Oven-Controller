@@ -589,7 +589,7 @@ run_servo_control:
 servo_control:
 	push acc
 	push psw
-
+	setb LEDRA.5
 	mov a, servo_pwm_counter ; move servo counter to accumulator
 	inc A ; a += 1
 	cjne a, #SERVO_PERIOD, servo_pwm_angle_compare ; jump if wrapup not needed
@@ -954,7 +954,7 @@ main:
 	; We use the pins of P0 to control the LCD.  Configure as outputs.
     mov P0MOD, #01111111b ; P0.0 to P0.6 are outputs.  ('1' makes the pin output)
     ; We use pins P1.5 and P1.1 as outputs also.  Configure accordingly.
-    mov P1MOD, #00100010b ; P1.5 and P1.1 are outputs
+    mov P1MOD, #00111010b ; P1.5 and P1.1 are outputs
     mov P2MOD, #0xff
     mov P3MOD, #0xff
     ; Turn off all the LEDs
