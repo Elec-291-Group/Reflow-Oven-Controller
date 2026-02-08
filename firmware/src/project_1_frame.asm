@@ -55,6 +55,17 @@ SEC_FSM_timer:  ds 1
 KEY1_DEB_state:    ds 1
 SEC_FSM_state: 	   ds 1
 Control_FSM_state: ds 1 
+
+;-- UI buffers I added (ayaan)
+Cursor_Idx: ds 1
+
+; These hold the TEXT (ASCII) safely
+; Digits Only + Null Terminator, got rid of C,:, and s 
+Buf_Soak_Temp: ds 4   
+Buf_Soak_Time: ds 5   
+Buf_Refl_Temp: ds 4   
+Buf_Refl_Time: ds 5
+
 ; 46d bytes used
 
 ;-------------------------------------------------------------------------------
@@ -107,18 +118,43 @@ PWM_OUT		   EQU P1.3 ; Pin connected to the ssr for outputing pwm signal
 
 ; These 'equ' must match the wiring between the DE10Lite board and the LCD!
 ; P0 is in connector JPIO.
-ELCD_RS equ P3.7
-ELCD_RW equ P3.5
-ELCD_E  equ P3.3
-ELCD_D4 equ P3.1
-ELCD_D5 equ P2.7
-ELCD_D6 equ P2.5
-ELCD_D7 equ P2.3
+
+;Added correct I/O definitions
+;-- LCD Pins ---
+ELCD_RS equ P1.7
+ELCD_E  equ P1.1
+ELCD_D4 equ P0.7
+ELCD_D5 equ P0.5
+ELCD_D6 equ P0.3
+ELCD_D7 equ P0.1
+
+; -- Buttons --
+BTN_SOAK_TEMP equ P0.0
+BTN_SOAK_TIME equ P0.2
+BTN_REFL_TEMP equ P0.4
+BTN_REFL_TIME equ P0.6
+
+; --- KEYPAD ---
+ROW1 equ P1.2
+ROW2 equ P1.4
+ROW3 equ P1.6
+ROW4 equ P2.0
+COL1 equ P2.2
+COL2 equ P2.4
+COL3 equ P2.6
+COL4 equ P3.0
 
 ;                     1234567890123456 <-- 16 characters per line LCD
 Initial_Message:  db 'initial message', 0
 String_state0_1:  db 'Welcome        ', 0
 String_state0_2:  db 'Press PB0      ', 0
+
+; --- UI STRINGS (REQUIRED FOR KEYPAD LOGIC), <- I can fix if duplicates
+Txt_Home:     db 'Select Mode:    ', 0
+Txt_SoakT:    db 'Set Soak Temp   ', 0
+Txt_SoakTime: db 'Set Soak Time   ', 0
+Txt_ReflT:    db 'Set Reflow Temp ', 0
+Txt_ReflTime: db 'Set Reflow Time ', 0
 
 ;                       1234567890123456
 String_state1:      db 'Set Parameters ', 0
@@ -324,6 +360,12 @@ Hex_to_bcd_8bit:
 LCD_Display_Update_func:
 	push acc
 	mov a, Control_FSM_state
+
+	; --- IMPORTANT ADD ----
+    ; If we are in State 1 (Setup), DO NOT RUN THIS, let the keypad logic handle the screen
+    cjne a, #1, Check_State_0
+    pop acc
+    ret 
 
 LCD_Display_Update_0:
 	cjne a, #0, LCD_Display_Update_1
@@ -789,11 +831,15 @@ Control_FSM_state1_a:
 	inc Control_FSM_state
 Control_FSM_state1:
 	cjne a, #1, Control_FSM_state2
+	; --- ENABLE USER INPUT ---
+    lcall Check_Buttons ; <--- New to poll user
+    lcall Check_Keypad
+    ; ----------------------------
 	jbc PB1_flag, Control_FSM_state1_b
 	sjmp Control_FSM_done
 Control_FSM_state1_b:
-	jbc config_finish_signal, Control_FSM_state2_a
-	sjmp Control_FSM_done
+	lcall Update_FSM_Variables ; <-- Added line for new function 	
+	sjmp Control_FSM_state2_a ;<-- got rid of a line or else would be stuck in a loop
 
 Control_FSM_state2_a:
 	inc Control_FSM_state
@@ -850,12 +896,26 @@ main:
 	; Initialization
     mov SP, #0x7F
 
-	; We use the pins of P0 to control the LCD.  Configure as outputs.
-    mov P0MOD, #01111111b ; P0.0 to P0.6 are outputs.  ('1' makes the pin output)
-    ; We use pins P1.5 and P1.1 as outputs also.  Configure accordingly.
-    mov P1MOD, #00100010b ; P1.5 and P1.1 are outputs
-    mov P2MOD, #0xff
-    mov P3MOD, #0xff
+; --- PORT CONFIGURATION (Changed bc old config. didn't have correct button inputs) ---
+    ; P0: Odd=LCD(Out), Even=Buttons(In) 
+    ; Binary: 10101010 -> Hex: 0xAA
+    mov P0MOD, #0xAA 
+
+    ; P1: Mixed usage 
+    ; P1.7(LCD_RS), P1.6(Row3), P1.5(Sound), P1.4(Row2)
+    ; P1.3(PWM), P1.2(Row1), P1.1(LCD_E) -> All Outputs
+    ; P1.0 (Unused/RX) -> Input
+    ; Binary: 11111110 -> Hex: 0xFE
+    mov P1MOD, #0xFE
+
+    ; P2: Row4(Out), Cols(In)
+    ; P2.0 (Row4) is Out (1). P2.2, P2.4, P2.6 (Cols) are In (0).
+    ; Binary: 00000001 -> Hex: 0x01
+    mov P2MOD, #0x01
+
+    ; P3: Col4(In)
+    ; P3.0 (Col4) is In (0).
+    mov P3MOD, #0x00
     ; Turn off all the LEDs
     mov LEDRA, #0 ; LEDRA is bit addressable
     mov LEDRB, #0 ; LEDRB is NOT bit addresable
@@ -904,6 +964,10 @@ main:
 	lcall Timer0_Init
     lcall Timer2_Init
 	lcall ELCD_4BIT
+	;----- Two new lines I added to initialize the UI
+	lcall Init_All_Buffers
+    lcall Update_Screen_Full
+	;-----
 	lcall Initialize_Serial_Port
 ;-------------------------------------------------------------------------------;
 ; while(1) loop
@@ -919,7 +983,7 @@ loop:
 	lcall Control_FSM
 
 	; Update the LCD display based on the current state
-	;lcall LCD_Display_Update_func
+	lcall LCD_Display_Update_func
 
 	; Update the pwm output for the ssr
 	lcall PWM_Wave 
@@ -927,5 +991,542 @@ loop:
 	; After initialization the program stays in this 'forever' loop
 	ljmp loop
 ;-------------------------------------------------------------------------------;
+
+; ================================================================
+; UI & HELPER SUBROUTINES
+; ================================================================
+
+; ----------------------------------------------------------------
+; MODULE: BRIDGE (Text to Integer Conversion)
+; ----------------------------------------------------------------
+Update_FSM_Variables:
+    ; --- 1. SOAK TEMP ---
+    mov R0, #Buf_Soak_Temp
+    lcall Parse_Temp_String
+    mov soak_temp+0, R7
+    mov soak_temp+1, #0
+    mov soak_temp+2, #0
+    mov soak_temp+3, #0
+
+    ; --- 2. REFLOW TEMP ---
+    mov R0, #Buf_Refl_Temp
+    lcall Parse_Temp_String
+    mov reflow_temp+0, R7
+    mov reflow_temp+1, #0
+    mov reflow_temp+2, #0
+    mov reflow_temp+3, #0
+
+    ; --- 3. SOAK TIME ---
+    mov R0, #Buf_Soak_Time
+    lcall Parse_Time_String
+    mov soak_time+0, R7
+    mov soak_time+1, R6
+    mov soak_time+2, #0
+    mov soak_time+3, #0
+
+    ; --- 4. REFLOW TIME ---
+    mov R0, #Buf_Refl_Time
+    lcall Parse_Time_String
+    mov reflow_time+0, R7
+    mov reflow_time+1, R6
+    mov reflow_time+2, #0
+    mov reflow_time+3, #0
+    ret
+
+; --- Helper: Parse "123" to Integer ---
+Parse_Temp_String:
+    mov R7, #0              ; Clear Result
+Parse_Temp_Loop:
+    mov A, @R0
+    jz Parse_Temp_Done      ; If Null, we are done
+    
+    ; Convert ASCII to Digit
+    clr C
+    subb A, #0x30
+    mov R5, A               ; R5 = New Digit
+    
+    ; Result = (Result * 10) + New Digit
+    mov A, R7
+    mov B, #10
+    mul AB
+    add A, R5
+    mov R7, A
+    
+    inc R0
+    sjmp Parse_Temp_Loop
+Parse_Temp_Done:
+    ret
+
+; --- Helper: Parse "MMSS" to Seconds ---
+Parse_Time_String:
+    ; 1. Minutes Tens
+    mov A, @R0
+    subb A, #0x30
+    mov B, #10
+    mul AB
+    mov R5, A
+    inc R0
+    
+    ; 2. Minutes Ones
+    mov A, @R0
+    subb A, #0x30
+    add A, R5
+    mov R5, A               ; R5 = Total Minutes
+    inc R0
+    
+    ; 3. Seconds Tens
+    mov A, @R0
+    subb A, #0x30
+    mov B, #10
+    mul AB
+    mov R4, A
+    inc R0
+    
+    ; 4. Seconds Ones
+    mov A, @R0
+    subb A, #0x30
+    add A, R4               ; R4 = Total Seconds
+    
+    ; 5. Calculate Total Seconds = (Mins * 60) + Secs
+    mov A, R5
+    mov B, #60
+    mul AB
+    add A, R4
+    mov R7, A               ; Low Byte
+    mov A, B
+    addc A, #0
+    mov R6, A               ; High Byte
+    ret
+
+; ----------------------------------------------------------------
+; MODULE: BUTTON HANDLER (Mode Selection)
+; ----------------------------------------------------------------
+Check_Buttons:
+    jnb BTN_SOAK_TEMP, Btn_Soak_Temp_Press
+    jnb BTN_SOAK_TIME, Btn_Soak_Time_Press
+    jnb BTN_REFL_TEMP, Btn_Refl_Temp_Press
+    jnb BTN_REFL_TIME, Btn_Refl_Time_Press
+    ret
+
+Btn_Soak_Temp_Press:
+    lcall Wait_25ms
+    mov Current_State, #1
+    mov Cursor_Idx, #0
+    sjmp Redraw_Screen
+
+Btn_Soak_Time_Press:
+    lcall Wait_25ms
+    mov Current_State, #2
+    mov Cursor_Idx, #0
+    sjmp Redraw_Screen
+
+Btn_Refl_Temp_Press:
+    lcall Wait_25ms
+    mov Current_State, #3
+    mov Cursor_Idx, #0
+    sjmp Redraw_Screen
+
+Btn_Refl_Time_Press:
+    lcall Wait_25ms
+    mov Current_State, #4
+    mov Cursor_Idx, #0
+    sjmp Redraw_Screen
+
+Redraw_Screen:
+    lcall Update_Screen_Full
+    ; Wait for button release
+    jnb BTN_SOAK_TEMP, $
+    jnb BTN_SOAK_TIME, $
+    jnb BTN_REFL_TEMP, $
+    jnb BTN_REFL_TIME, $
+    ret
+
+; ----------------------------------------------------------------
+; MODULE: KEYPAD HANDLER (Input Logic)
+; ----------------------------------------------------------------
+Check_Keypad:
+    ; If State is 0 (Home), ignore keypad
+    mov A, Current_State
+    jz Keypad_Exit
+    
+    lcall Keypad_Scan
+    jnc Keypad_Exit         ; Carry = 0 means no key pressed
+
+    ; --- Check Special Keys ---
+    mov A, R7
+    cjne A, #14, Check_Hash ; 14 is Star (*)
+    
+    ; Star Key Pressed: Reset Buffer
+    lcall Reset_Current_Buffer
+    lcall Update_Screen_Full
+    mov Cursor_Idx, #0
+    ret
+
+Check_Hash:
+    mov A, R7
+    cjne A, #12, Check_Numeric ; 12 is Hash (#)
+    ret                     ; Ignore Hash key
+
+Check_Numeric:
+    ; Ensure key is 0-9
+    mov A, R7
+    clr C
+    subb A, #10
+    jnc Symbol_Key_Ignored
+    
+    ; Convert to ASCII
+    mov A, R7
+    add A, #0x30
+    mov R5, A
+
+    ; Save to Buffer
+    lcall Get_Current_Buffer_Addr
+    mov A, Cursor_Idx
+    add A, R0
+    mov R0, A
+    mov A, R5
+    mov @R0, A
+    inc Cursor_Idx
+
+    ; --- Check Cursor Limits ---
+    mov A, Current_State
+    cjne A, #1, Check_Limit_Time_1
+    sjmp Limit_Temp_3
+
+Check_Limit_Time_1:
+    cjne A, #3, Limit_Time_4
+    sjmp Limit_Temp_3
+
+Limit_Temp_3:
+    mov A, Cursor_Idx
+    cjne A, #3, Do_Refresh
+    dec Cursor_Idx          ; Stay at last digit
+    sjmp Do_Refresh
+
+Limit_Time_4:
+    mov A, Cursor_Idx
+    cjne A, #4, Do_Refresh
+    dec Cursor_Idx          ; Stay at last digit
+    sjmp Do_Refresh
+
+Do_Refresh:
+    lcall Update_Screen_Full
+    ret
+
+Symbol_Key_Ignored:
+    ret
+Keypad_Exit:
+    ret
+
+; ----------------------------------------------------------------
+; MODULE: HARDWARE SCANNER (Matrix Logic)
+; ----------------------------------------------------------------
+Keypad_Scan:
+    ; Step 1: Check if ANY key is pressed (All Rows Low)
+    clr ROW1
+    clr ROW2
+    clr ROW3
+    clr ROW4
+    mov C, COL1
+    anl C, COL2
+    anl C, COL3
+    anl C, COL4
+    jnc Keypad_Debounce
+    clr C
+    ret
+
+Keypad_Debounce:
+    lcall Wait_25ms
+    mov C, COL1
+    anl C, COL2
+    anl C, COL3
+    anl C, COL4
+    jnc Keypad_Find_Row
+    clr C
+    ret
+
+Keypad_Find_Row:
+    setb ROW1
+    setb ROW2
+    setb ROW3
+    setb ROW4
+
+    ; Row 1
+    clr ROW1
+    jnb COL1, Key_1
+    jnb COL2, Key_2
+    jnb COL3, Key_3
+    jnb COL4, Key_A
+    setb ROW1
+
+    ; Row 2
+    clr ROW2
+    jnb COL1, Key_4
+    jnb COL2, Key_5
+    jnb COL3, Key_6
+    jnb COL4, Key_B
+    setb ROW2
+
+    ; Row 3
+    clr ROW3
+    jnb COL1, Key_7
+    jnb COL2, Key_8
+    jnb COL3, Key_9
+    jnb COL4, Key_C
+    setb ROW3
+
+    ; Row 4
+    clr ROW4
+    jnb COL1, Key_Star
+    jnb COL2, Key_0
+    jnb COL3, Key_Hash
+    jnb COL4, Key_D
+    setb ROW4
+    clr C
+    ret
+
+; Key Mapping
+Key_1: mov R7, #1
+       sjmp Wait_Release
+Key_2: mov R7, #2
+       sjmp Wait_Release
+Key_3: mov R7, #3
+       sjmp Wait_Release
+Key_A: mov R7, #10
+       sjmp Wait_Release
+Key_4: mov R7, #4
+       sjmp Wait_Release
+Key_5: mov R7, #5
+       sjmp Wait_Release
+Key_6: mov R7, #6
+       sjmp Wait_Release
+Key_B: mov R7, #11
+       sjmp Wait_Release
+Key_7: mov R7, #7
+       sjmp Wait_Release
+Key_8: mov R7, #8
+       sjmp Wait_Release
+Key_9: mov R7, #9
+       sjmp Wait_Release
+Key_C: mov R7, #13
+       sjmp Wait_Release
+Key_Star: mov R7, #14
+       sjmp Wait_Release
+Key_0: mov R7, #0
+       sjmp Wait_Release
+Key_Hash: mov R7, #12
+       sjmp Wait_Release
+Key_D: mov R7, #15
+       sjmp Wait_Release
+
+Wait_Release:
+    mov C, COL1
+    anl C, COL2
+    anl C, COL3
+    anl C, COL4
+    jnc Wait_Release
+    setb C
+    setb ROW1
+    setb ROW2
+    setb ROW3
+    setb ROW4
+    ret
+
+Wait_25ms:
+    mov R0, #15
+W25_L3: mov R1, #74
+W25_L2: mov R2, #250
+W25_L1: djnz R2, W25_L1
+    djnz R1, W25_L2
+    djnz R0, W25_L3
+    ret
+
+; ----------------------------------------------------------------
+; MODULE: BUFFER INIT (Reset Logic)
+; ----------------------------------------------------------------
+Init_All_Buffers:
+    mov R0, #Buf_Soak_Temp
+    lcall Init_Temp_Template
+    mov R0, #Buf_Refl_Temp
+    lcall Init_Temp_Template
+    mov R0, #Buf_Soak_Time
+    lcall Init_Time_Template
+    mov R0, #Buf_Refl_Time
+    lcall Init_Time_Template
+    ret
+
+Init_Temp_Template:
+    mov @R0, #'0'
+    inc R0
+    mov @R0, #'0'
+    inc R0
+    mov @R0, #'0'
+    inc R0
+    mov @R0, #0
+    ret
+
+Init_Time_Template:
+    mov @R0, #'0'
+    inc R0
+    mov @R0, #'0'
+    inc R0
+    mov @R0, #'0'
+    inc R0
+    mov @R0, #'0'
+    inc R0
+    mov @R0, #0
+    ret
+
+Reset_Current_Buffer:
+    mov A, Current_State
+    cjne A, #1, Reset_Chk_2
+    mov R0, #Buf_Soak_Temp
+    lcall Init_Temp_Template
+    ret
+Reset_Chk_2:
+    cjne A, #2, Reset_Chk_3
+    mov R0, #Buf_Soak_Time
+    lcall Init_Time_Template
+    ret
+Reset_Chk_3:
+    cjne A, #3, Reset_Chk_4
+    mov R0, #Buf_Refl_Temp
+    lcall Init_Temp_Template
+    ret
+Reset_Chk_4:
+    mov R0, #Buf_Refl_Time
+    lcall Init_Time_Template
+    ret
+
+; ----------------------------------------------------------------
+; MODULE: SCREEN UPDATE (Visual Logic)
+; ----------------------------------------------------------------
+Update_Screen_Full:
+    lcall Clear_Screen_Func
+    Set_Cursor(1, 1)
+
+    ; --- Draw Line 1 (Titles) ---
+    mov A, Current_State
+    cjne A, #0, Update_State_1
+    Send_Constant_String(#Txt_Home)
+    ret 
+Update_State_1:
+    cjne A, #1, Update_State_2
+    Send_Constant_String(#Txt_SoakT)
+    sjmp Draw_Temp_Format
+Update_State_2:
+    cjne A, #2, Update_State_3
+    Send_Constant_String(#Txt_SoakTime)
+    sjmp Draw_Time_Format
+Update_State_3:
+    cjne A, #3, Update_State_4
+    Send_Constant_String(#Txt_ReflT)
+    sjmp Draw_Temp_Format
+Update_State_4:
+    Send_Constant_String(#Txt_ReflTime)
+    sjmp Draw_Time_Format
+
+; --- Draw Line 2 (Values) ---
+Draw_Temp_Format:
+    Set_Cursor(2, 1)
+    lcall Get_Current_Buffer_Addr
+    lcall Print_String_RAM
+    mov A, #'C'
+    lcall ?WriteData
+    sjmp Restore_Cursor
+
+Draw_Time_Format:
+    Set_Cursor(2, 1)
+    lcall Get_Current_Buffer_Addr
+    ; MM
+    mov A, @R0
+    lcall ?WriteData
+    inc R0
+    mov A, @R0
+    lcall ?WriteData
+    inc R0
+    ; Colon
+    mov A, #':'
+    lcall ?WriteData
+    ; SS
+    mov A, @R0
+    lcall ?WriteData
+    inc R0
+    mov A, @R0
+    lcall ?WriteData
+    ; Unit
+    mov A, #'s'
+    lcall ?WriteData
+    sjmp Restore_Cursor
+
+; --- Restore Cursor Position ---
+Restore_Cursor:
+    mov A, Current_State
+    cjne A, #2, Check_State_4
+    sjmp Adjust_Cursor_Time
+Check_State_4:
+    cjne A, #4, Normal_Cursor
+    sjmp Adjust_Cursor_Time
+
+Normal_Cursor:
+    mov A, Cursor_Idx
+    add A, #0xC0
+    lcall ?WriteCommand
+    ret
+
+Adjust_Cursor_Time:
+    ; Skip the colon index (2)
+    mov A, Cursor_Idx
+    cjne A, #2, No_Skip
+    inc A 
+No_Skip:
+    ; Add 1 if past the colon
+    clr C
+    subb A, #2
+    jc No_Add
+    mov A, Cursor_Idx
+    inc A
+    sjmp Final_Cursor_Set
+No_Add:
+    mov A, Cursor_Idx
+Final_Cursor_Set:
+    add A, #0xC0
+    lcall ?WriteCommand
+    ret
+
+Print_String_RAM:
+    mov A, @R0
+    jz Print_String_Done
+    lcall ?WriteData
+    inc R0
+    sjmp Print_String_RAM
+Print_String_Done:
+    ret
+
+Clear_Screen_Func:
+    mov A, #0x01
+    lcall ?WriteCommand
+    mov R2, #10
+    lcall Wait_25ms
+    mov A, #0x0F
+    lcall ?WriteCommand
+    ret
+
+Get_Current_Buffer_Addr:
+    mov A, Current_State
+    cjne A, #1, Get_Buf_2
+    mov R0, #Buf_Soak_Temp
+    ret
+Get_Buf_2:
+    cjne A, #2, Get_Buf_3
+    mov R0, #Buf_Soak_Time
+    ret
+Get_Buf_3:
+    cjne A, #3, Get_Buf_4
+    mov R0, #Buf_Refl_Temp
+    ret
+Get_Buf_4:
+    mov R0, #Buf_Refl_Time
+    ret
 
 END
