@@ -56,6 +56,9 @@ KEY1_DEB_state:    ds 1
 SEC_FSM_state: 	   ds 1
 Control_FSM_state: ds 1 
 
+Current_State:     ds 1
+
+
 ;-- UI buffers I added (ayaan)
 Cursor_Idx: ds 1
 
@@ -363,7 +366,7 @@ LCD_Display_Update_func:
 
 	; --- IMPORTANT ADD ----
     ; If we are in State 1 (Setup), DO NOT RUN THIS, let the keypad logic handle the screen
-    cjne a, #1, Check_State_0
+    cjne a, #1, LCD_Display_Update_0
     pop acc
     ret 
 
@@ -824,8 +827,9 @@ Control_FSM_state0_a:
 	mov Control_FSM_state, #0
 Control_FSM_state0:
 	cjne a, #0, Control_FSM_state1
-	jbc PB0_flag, Control_FSM_state1_a
-	sjmp Control_FSM_done
+	jb P1.0, Control_FSM_done
+	lcall Wait_For_P1_0_Release
+	sjmp Control_FSM_state1_a
 
 Control_FSM_state1_a:
 	inc Control_FSM_state
@@ -1253,70 +1257,70 @@ Keypad_Find_Row:
 
     ; Row 1
     clr ROW1
-    jnb COL1, Key_1
-    jnb COL2, Key_2
-    jnb COL3, Key_3
-    jnb COL4, Key_A
+    jnb COL1, Keypad_Key_1
+    jnb COL2, Keypad_Key_2
+    jnb COL3, Keypad_Key_3
+    jnb COL4, Keypad_Key_A
     setb ROW1
 
     ; Row 2
     clr ROW2
-    jnb COL1, Key_4
-    jnb COL2, Key_5
-    jnb COL3, Key_6
-    jnb COL4, Key_B
+    jnb COL1, Keypad_Key_4
+    jnb COL2, Keypad_Key_5
+    jnb COL3, Keypad_Key_6
+    jnb COL4, Keypad_Key_B
     setb ROW2
 
     ; Row 3
     clr ROW3
-    jnb COL1, Key_7
-    jnb COL2, Key_8
-    jnb COL3, Key_9
-    jnb COL4, Key_C
+    jnb COL1, Keypad_Key_7
+    jnb COL2, Keypad_Key_8
+    jnb COL3, Keypad_Key_9
+    jnb COL4, Keypad_Key_C
     setb ROW3
 
     ; Row 4
     clr ROW4
-    jnb COL1, Key_Star
-    jnb COL2, Key_0
-    jnb COL3, Key_Hash
-    jnb COL4, Key_D
+    jnb COL1, Keypad_Key_Star
+    jnb COL2, Keypad_Key_0
+    jnb COL3, Keypad_Key_Hash
+    jnb COL4, Keypad_Key_D
     setb ROW4
     clr C
     ret
 
-; Key Mapping
-Key_1: mov R7, #1
+; Key Mapping (Renamed to avoid conflicts)
+Keypad_Key_1: mov R7, #1
        sjmp Wait_Release
-Key_2: mov R7, #2
+Keypad_Key_2: mov R7, #2
        sjmp Wait_Release
-Key_3: mov R7, #3
+Keypad_Key_3: mov R7, #3
        sjmp Wait_Release
-Key_A: mov R7, #10
+Keypad_Key_A: mov R7, #10
        sjmp Wait_Release
-Key_4: mov R7, #4
+Keypad_Key_4: mov R7, #4
        sjmp Wait_Release
-Key_5: mov R7, #5
+Keypad_Key_5: mov R7, #5
        sjmp Wait_Release
-Key_6: mov R7, #6
+Keypad_Key_6: mov R7, #6
        sjmp Wait_Release
-Key_B: mov R7, #11
+Keypad_Key_B: mov R7, #11
        sjmp Wait_Release
-Key_7: mov R7, #7
+Keypad_Key_7: mov R7, #7
        sjmp Wait_Release
-Key_8: mov R7, #8
+Keypad_Key_8: mov R7, #8
        sjmp Wait_Release
-Key_9: mov R7, #9
+Keypad_Key_9: mov R7, #9
        sjmp Wait_Release
-Key_C: mov R7, #13
+Keypad_Key_C: mov R7, #13
        sjmp Wait_Release
-Key_Star: mov R7, #14
+Keypad_Key_Star: mov R7, #14
        sjmp Wait_Release
-Key_0: mov R7, #0
+Keypad_Key_0: mov R7, #0
        sjmp Wait_Release
-Key_Hash: mov R7, #12
+Keypad_Key_Hash: mov R7, #12
        sjmp Wait_Release
-Key_D: mov R7, #15
+Keypad_Key_D: mov R7, #15
        sjmp Wait_Release
 
 Wait_Release:
@@ -1527,6 +1531,11 @@ Get_Buf_3:
     ret
 Get_Buf_4:
     mov R0, #Buf_Refl_Time
+    ret
+    
+; --- Helper to prevent "Machine Gun" button presses ---
+Wait_For_P1_0_Release:
+    jnb P1.0, $    ; Wait here while the button is still pressed (0)
     ret
 
 END
