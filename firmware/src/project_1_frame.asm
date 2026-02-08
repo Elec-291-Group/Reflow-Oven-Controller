@@ -29,7 +29,6 @@ org 0x002B
 ; includes
 $NOLIST
 $include(..\inc\MODMAX10)
-$include(..\inc\LCD_4bit_DE10Lite_no_RW.inc) ; LCD related functions and utility macros
 $include(..\inc\math32.asm) ; 
 $LIST
 ; ----------------------------------------------------------------------------------------------;
@@ -74,7 +73,7 @@ proportional_gain_var: ds 4
 bseg
 mf:		dbit 1 ; math32 sign
 one_second_flag: dbit 1
-one_millisecond_flag: dbit 1 ; one_millisecond_flag for pwm signal
+one_ms_pwm_flag: dbit 1 ; one_millisecond_flag for pwm signal
 
 soak_temp_reached: dbit 1
 reflow_temp_reached: dbit 1
@@ -87,6 +86,8 @@ reset_signal: dbit 1
 stop_signal: dbit 1
 start_signal: dbit 1
 config_finish_signal: dbit 1
+
+state_change_signal: dbit 1
 
 Key1_flag: dbit 1
 PB0_flag: dbit 1 ; start entire program
@@ -242,38 +243,11 @@ Send32:
     mov A, #0AH
     lcall putchar
     ret
+; -----------------------------------------------------------------------------------------------;
 
-;------------------------------------------------------------------------------------------------;
-; Routine to initialize the ISR for timer 2 
-Timer2_Init:
-	mov T2CON, #0 ; Stop timer/counter.  Autoreload mode.
-	mov TH2, #high(TIMER2_RELOAD)
-	mov TL2, #low(TIMER2_RELOAD)
-	; Set the reload value
-	mov RCAP2H, #high(TIMER2_RELOAD)
-	mov RCAP2L, #low(TIMER2_RELOAD)
-	; Enable the timer and interrupts
-    setb ET2  ; Enable timer 2 interrupt
-    setb TR2  ; Enable timer 2
-	ret
-
-; ISR for timer 2.  Runs every 1 ms ;
-Timer2_ISR:
-	push acc
-	push psw
-	clr TF2  ; Timer 2 doesn't clear TF2 automatically. Do it in ISR
-	; cpl P1.1 ; Optional debug pin toggle for scope (ensure it's not used elsewhere)
-
-; FSM states timers
-	inc KEY1_DEB_timer
-	inc SEC_FSM_timer
-
-	setb one_millisecond_flag ; set the one millisecond flag
-
-Timer2_ISR_done:
-	pop psw
-	pop acc
-	reti
+;-----------------------------------------------------------------------------------------------;
+$include(..\inc\Timer2_ISR.inc) ; Timer 2 ISR for 1ms tick and pwm signal generation
+$include(..\inc\LCD_4bit_DE10Lite_no_RW.inc) ; LCD related functions and utility macros
 ;-----------------------------------------------------------------------------------------------;
 
 ;-----------------------------------------------------------------------------------------------;
@@ -353,6 +327,8 @@ Hex_to_bcd_8bit:
 ; Display Function for LCD 						
 LCD_Display_Update_func:
 	push acc
+	jnb state_change_signal, LCD_Display_Update_Done
+	clr state_change_signal
 	mov a, Control_FSM_state
 
 LCD_Display_Update_0:
@@ -711,7 +687,7 @@ power_control_done:
 ; generate pwm signal for the ssr ; 1.5s period for the pwm signal; with 1 watt 
 ; clarity for the pwm signal; input parameter: power_output; used buffers: x, y
 PWM_Wave: ; call pwm generator when 1 ms flag is triggered
-	jbc one_millisecond_flag, pwm_wave_generator
+	jbc one_ms_pwm_flag, pwm_wave_generator
 	sjmp end_pwm_generator
 
 pwm_wave_generator:
@@ -777,6 +753,7 @@ Control_FSM:
 
 Control_FSM_state0_a:
 	mov Control_FSM_state, #0
+	setb state_change_signal
 Control_FSM_state0:
 	cjne a, #0, Control_FSM_state1
 	jbc PB0_flag, Control_FSM_state1_a
@@ -784,6 +761,7 @@ Control_FSM_state0:
 
 Control_FSM_state1_a:
 	inc Control_FSM_state
+	setb state_change_signal
 Control_FSM_state1:
 	cjne a, #1, Control_FSM_state2
 	jbc PB1_flag, Control_FSM_state1_b
@@ -794,6 +772,7 @@ Control_FSM_state1_b:
 
 Control_FSM_state2_a:
 	inc Control_FSM_state
+	setb state_change_signal
 Control_FSM_state2:
 	cjne a, #2, Control_FSM_state3
 	jbc PB2_flag, Control_FSM_state6_a
@@ -802,6 +781,7 @@ Control_FSM_state2:
 
 Control_FSM_state3_a:
 	inc Control_FSM_state
+	setb state_change_signal
 Control_FSM_state3:
 	cjne a, #3, Control_FSM_state4
 	jbc PB2_flag, Control_FSM_state6_a
@@ -810,6 +790,7 @@ Control_FSM_state3:
 
 Control_FSM_state4_a:
 	inc Control_FSM_state	
+	setb state_change_signal
 Control_FSM_state4:
 	cjne a, #4, Control_FSM_state5
 	jbc PB2_flag, Control_FSM_state6_a
@@ -818,6 +799,7 @@ Control_FSM_state4:
 
 Control_FSM_state5_a:
 	inc Control_FSM_state
+	setb state_change_signal
 Control_FSM_state5:
 	cjne a, #5, Control_FSM_state6
 	jbc PB2_flag, Control_FSM_state6_a
@@ -826,6 +808,7 @@ Control_FSM_state5:
 
 Control_FSM_state6_a:
 	inc Control_FSM_state
+	setb state_change_signal
 Control_FSM_state6:
 	cjne a, #6, Control_FSM_done
 	jbc cooling_temp_reached, Control_FSM_state7_a
@@ -833,6 +816,7 @@ Control_FSM_state6:
 
 Control_FSM_state7_a:
 	inc Control_FSM_state
+	setb state_change_signal
 Control_FSM_state7:
 	cjne a, #7, Control_FSM_done
 	jbc PB0_flag, Control_FSM_state0_a
@@ -896,6 +880,7 @@ main:
 	clr reflow_temp_reached
 	clr reflow_time_reached
 	clr cooling_temp_reached
+	clr state_change_signal
 
 	lcall Timer0_Init
     lcall Timer2_Init
@@ -913,7 +898,7 @@ loop:
 	lcall Control_FSM
 
 	; Update the LCD display based on the current state
-	;lcall LCD_Display_Update_func
+	lcall LCD_Display_Update_func
 
 	; Update the pwm output for the ssr
 	lcall PWM_Wave 
