@@ -13,7 +13,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 # ===================== SERIAL =====================
-PORT = "COM8"
+PORT = "COM12"
 BAUD = 57600
 
 # ===================== PLOT / LOG =====================
