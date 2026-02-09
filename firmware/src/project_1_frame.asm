@@ -77,6 +77,11 @@ Buf_Soak_Time: ds 5
 Buf_Refl_Temp: ds 4   
 Buf_Refl_Time: ds 5
 
+; Buzzer state
+beep_count:  ds 1      ; remaining beeps
+beep_state:  ds 1      ; 0=idle, 1=ON, 2=OFF
+beep_tmr:    ds 2      ; 16-bit ms timer (needs to reach 500)
+
 ; 46d bytes used
 
 ;-------------------------------------------------------------------------------
@@ -107,6 +112,9 @@ tc_startup_window: dbit 1   ; 1 = still within first 60 seconds of the run
 PB0_flag: dbit 1 ; start entire program
 PB1_flag: dbit 1 ; start soak
 PB2_flag: dbit 1 ; pause process
+
+;buzzer beep
+one_ms_beep_flag: dbit 1
 
 ; BSEG (Bit Segment)
 wait25_active: dbit 1 ; 1 = We are currently waiting
@@ -214,7 +222,7 @@ Timer0_Init:
     mov TL0, #low(TIMER0_RELOAD)
     ; Enable the timer and interrupts
     setb ET0  ; Enable timer 0 interrupt
-    setb TR0  ; Start timer 0
+    ; setb TR0  (no need to open at first)
     ret
 ; ISR for timer 0.  Set to execute every 1/4096Hz 
 ; to generate a 2048 Hz square wave at pin P1.5 
@@ -863,6 +871,7 @@ Safety_Check_TC:
     setb tc_missing_abort
     setb stop_signal
     clr  PWM_OUT
+	lcall Beep_Ten
 
 Safety_TC_Done:
     pop  AR2
@@ -871,6 +880,88 @@ Safety_TC_Done:
     pop  psw
     pop  acc
     ret
+
+;============================================================
+; Buzzer Beep time functions
+;============================================================
+
+Beep_Once:
+    mov beep_count, #1
+    sjmp Beep_Start
+
+Beep_Five:
+    mov beep_count, #5
+    sjmp Beep_Start
+
+Beep_Ten:
+    mov beep_count, #10
+
+Beep_Start:
+    mov beep_state, #1
+    mov beep_tmr, #0
+    mov beep_tmr+1, #0
+    setb TR0            ; start 2kHz tone
+    ret
+;============================================================
+
+;============================================================
+; Buzzer beep Task 
+; Purpose: beeps, holds, stop
+; Buzzer task:
+; Beep once when state changes
+; Beep five times if finished
+; Beep ten times if meets error
+;============================================================
+
+Beep_Task:
+    jnb one_ms_beep_flag, Beep_Done
+    clr one_ms_beep_flag
+
+    mov a, beep_state
+    jz Beep_Done
+
+; ---- increment 16-bit timer ----
+    inc beep_tmr
+    mov a, beep_tmr
+    jnz Beep_Check
+    inc beep_tmr+1
+
+Beep_Check:
+    ; check if timer == 500 (0x01F4)
+    mov a, beep_tmr
+    cjne a, #0F4h, Beep_Done
+    mov a, beep_tmr+1
+    cjne a, #01h, Beep_Done
+
+    ; reached 500ms -> reset timer
+    mov beep_tmr, #0
+    mov beep_tmr+1, #0
+
+    mov a, beep_state
+    cjne a, #1, Beep_Off_State
+
+; ---- ON finished -> go OFF ----
+    clr TR0
+    mov beep_state, #2
+    ret
+
+Beep_Off_State:
+; ---- OFF finished -> decrement count / next ON ----
+    dec beep_count
+    jz  Beep_Stop
+
+    mov beep_state, #1
+    setb TR0
+    ret
+
+Beep_Stop:
+    clr TR0
+    mov beep_state, #0
+    ret
+
+Beep_Done:
+    ret
+;==================================================================
 
 ;-------------------------------------------------------------------------------;
 ; Main Control FSM for the entire process
@@ -885,7 +976,7 @@ Control_FSM:
 Control_FSM_state0_a:
     mov Control_FSM_state, #0
     setb state_change_signal
-    
+	
 Control_FSM_state0:
     cjne a, #0, Control_FSM_state1
     jb P1.0, Control_FSM_done_bridge ; If Button High (Not Pressed), Exit
@@ -921,6 +1012,7 @@ Control_FSM_state1_ret:
 Control_FSM_state2_a:
     inc Control_FSM_state
     setb state_change_signal
+	lcall Beep_Once
 Control_FSM_state2:
     cjne a, #2, Control_FSM_state3
     jnb PB2_flag, State2_Check
@@ -931,6 +1023,7 @@ State2_Check:
     clr soak_temp_reached
     inc Control_FSM_state
     setb state_change_signal
+	lcall Beep_Once
     mov current_time_sec, #0
     mov current_time_minute, #0
     
@@ -952,6 +1045,7 @@ State3_Check:
     clr soak_time_reached
     inc Control_FSM_state      
     setb state_change_signal 
+	lcall Beep_Once
 State3_Ret:
     ret
 
@@ -966,6 +1060,7 @@ State4_Check:
     clr reflow_temp_reached
     inc Control_FSM_state
     setb state_change_signal
+	lcall Beep_Once
     mov current_time_sec, #0
     mov current_time_minute, #0
     ; --- ADD THIS LINE ---
@@ -996,6 +1091,7 @@ State5_Ret:
 Control_FSM_state6_a:
     inc Control_FSM_state
     setb state_change_signal
+	lcall Beep_Once
 Control_FSM_state6:
     cjne a, #6, Control_FSM_state7
     ; Wait for Cooling Temp Reached
@@ -1003,6 +1099,7 @@ Control_FSM_state6:
     clr cooling_temp_reached
     inc Control_FSM_state
     setb state_change_signal
+	lcall Beep_Five
 State6_Ret:
     ret
 
@@ -1187,6 +1284,8 @@ loop:
 
     ; Update the pwm output for the ssr
     lcall PWM_Wave 
+	; Update the Buzzer 
+	lcall Beep_Task
 
     ; After initialization the program stays in this 'forever' loop
     ljmp loop

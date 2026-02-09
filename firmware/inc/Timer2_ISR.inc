@@ -33,6 +33,7 @@ Timer2_ISR:
     inc KEY1_DEB_timer
     inc SEC_FSM_timer
     setb one_ms_pwm_flag 
+    setb one_ms_beep_flag
 
     ; --- 2. NEW: Non-Blocking Delay Counters ---
     
