@@ -61,14 +61,10 @@ KEY1_DEB_timer: ds 1
 SEC_FSM_timer:  ds 1
 KEY1_DEB_state:    ds 1
 SEC_FSM_state: 	   ds 1
-<<<<<<< HEAD
-Control_FSM_state: ds 1
-=======
 Control_FSM_state: ds 1 
 
 servo_pwm_counter: ds 1 ; counter for the servo pwm signal
 ; 46d bytes used
->>>>>>> main
 
 proportional_gain_var: ds 4
 
@@ -102,15 +98,12 @@ Key1_flag: dbit 1
 PB0_flag: dbit 1 ; start entire program
 PB1_flag: dbit 1 ; start soak
 PB2_flag: dbit 1 ; pause process
-<<<<<<< HEAD
-=======
 
 servo_angle_zero: dbit 1 ; flag for indicating whether the servo angle should be at 0 or not: 1 -> 0; 0 -> 180
 ; 0 degree as oven door open
 ; 180 degree as oven door close
 
 ; 11 bits used
->>>>>>> main
 
 soak_temp_greater: dbit 1 ; target soak_temp greater than current_temp
 ; 11 bits used
@@ -137,17 +130,14 @@ SOUND_OUT      EQU P1.5 ; Pin connected to the speaker
 
 PWM_OUT		   EQU P1.3 ; Pin connected to the ssr for outputing pwm signal
 
-<<<<<<< HEAD
 MAX_POWER	   EQU 1500 ; max oven power
 NO_POWER	   EQU 0    ; no power
 BASE_POWER     EQU (MAX_POWER/5) ; 20% base power for state 2, 4
 
 KP			   EQU 5 ; proportional gain
-=======
 SERVO_PERIOD   EQU 20 ; pwm signal period for the servo motor (20 ms)
 SERVO_0        EQU 1 ; pwm high time for the servo motor to stay at 0 degree
 SERVO_180      EQU 2 ; pwm high time for the servo motor to stay at 180 degrees
->>>>>>> main
 
 ; These 'equ' must match the wiring between the DE10Lite board and the LCD!
 ; P0 is in connector JPIO.  Check "CV-8052 Soft Processor in the DE10Lite Board: Getting
