@@ -67,6 +67,9 @@ pwm_counter:   ds 4 ; counter for pwm (0-1500_timer: ds 1
 Control_FSM_state: ds 1 
 Current_State:     ds 1
 
+soak_temp_diff: ds 4 ; temperature difference between target soak temp and current oven temp 
+proportional_gain_var: ds 4 ; power gain calculated from the proportional block
+
 ;-- UI buffers I added (ayaan)
 Cursor_Idx: ds 1
 
@@ -87,6 +90,15 @@ PB2_DEB_state:  ds 1
 iseg at 0x80
 ; These hold the TEXT (ASCII) safely
 ; Digits Only + Null Terminator, got rid of C,:, and s 
+
+; Buzzer state
+beep_count:  ds 1      ; remaining beeps
+beep_state:  ds 1      ; 0=idle, 1=ON, 2=OFF
+beep_tmr:    ds 2      ; 16-bit ms timer (needs to reach 500)
+
+servo_pwm_counter: ds 1 ; counter for the servo pwm signal
+
+iseg at 0x80
 Buf_Soak_Temp: ds 4   
 Buf_Soak_Time: ds 5   
 Buf_Refl_Temp: ds 4   
@@ -125,6 +137,9 @@ PB0_flag: dbit 1 ; start entire program
 PB1_flag: dbit 1 ; start soak
 PB2_flag: dbit 1 ; pause process
 
+;buzzer beep
+one_ms_beep_flag: dbit 1
+
 ; BSEG (Bit Segment)
 wait25_active: dbit 1 ; 1 = We are currently waiting
 wait25_done:   dbit 1 ; 1 = The 25ms has finished
@@ -140,6 +155,10 @@ wait25_lcd_done:      dbit 1
 fullscreen_update_signal: dbit 1
 
 one_second_flag_test: dbit 1
+one_millisecond_flag_servo: dbit 1 ; set the one millsiecond flag for servo pwm signal generation
+servo_angle_zero: dbit 1 ; flag for indicating whether the servo angle should be at 0 or not: 1 -> 0; 0 -> 180
+soak_temp_greater: dbit 1 ; target soak_temp greater than current_temp
+; 11 bits used
 
 ;-------------------------------------------------------------------------------
 cseg
@@ -193,6 +212,18 @@ COL2 equ P2.4
 COL3 equ P2.6
 COL4 equ P3.0
 
+SERVO_OUT      EQU p3.6 ; servo pin
+
+SERVO_PERIOD   EQU 20 ; pwm signal period for the servo motor (20 ms)
+SERVO_0        EQU 1 ; pwm high time for the servo motor to stay at 0 degree
+SERVO_180      EQU 2 ; pwm high time for the servo motor to stay at 180 degrees
+
+COLD_JUNCTION_TEMP equ 20
+MAX_POWER	   EQU 1500 ; max oven power
+NO_POWER	   EQU 0    ; no power
+BASE_POWER     EQU (MAX_POWER/5) ; 20% base power for state 2, 4
+KP			   EQU 5 ; proportional gain
+
 ;                     1234567890123456 <-- 16 characters per line LCD
 Initial_Message:  db 'initial message', 0
 String_state0_1:  db 'Welcome        ', 0
@@ -211,6 +242,8 @@ String_soak_temp:   db 'Soak Temp:', 0
 String_reflow_temp: db 'Reflow Temp:', 0
 String_soak_time:   db 'Soak Time:', 0
 String_reflow_time: db 'Reflow Time:', 0
+
+String_temp_line:  db 'Temp: ', 0
 
 ;                     1234567890123456
 String_state2:    db 'Ramp to Soak   ', 0
@@ -238,7 +271,7 @@ Timer0_Init:
     mov TL0, #low(TIMER0_RELOAD)
     ; Enable the timer and interrupts
     setb ET0  ; Enable timer 0 interrupt
-    setb TR0  ; Start timer 0
+    ; setb TR0  (no need to open at first)
     ret
 ; ISR for timer 0.  Set to execute every 1/4096Hz 
 ; to generate a 2048 Hz square wave at pin P1.5 
@@ -307,6 +340,63 @@ Send32:
     lcall putchar
     ret
 ; -----------------------------------------------------------------------------------------------;
+
+;-------------------------------------------------------------------------------
+; Serial temperature line for PuTTY/screen
+; Outputs: "Temp: XXXC\r\n"
+;-------------------------------------------------------------------------------
+Serial_Send_Temp_Line:
+    mov dptr, #String_temp_line
+    lcall SendString
+
+    ; Convert current_temp to BCD (same as LCD)
+    mov x, current_temp
+    mov x+1, current_temp+1
+    mov x+2, current_temp+2
+    mov x+3, current_temp+3
+    lcall hex2bcd
+
+    mov R7, #0          ; printed_flag = 0
+
+    ; Print Hundreds (if non-zero)
+    mov a, bcd+1
+    anl a, #0x0F
+    jz Serial_Skip_Hundreds
+    add a, #0x30
+    lcall putchar
+    mov R7, #1
+Serial_Skip_Hundreds:
+
+    ; Print Tens (if non-zero or if hundreds already printed)
+    mov a, bcd+0
+    swap a
+    anl a, #0x0F
+    jnz Serial_Print_Tens
+    mov a, R7
+    jz Serial_Skip_Tens
+Serial_Print_Tens:
+    mov a, bcd+0
+    swap a
+    anl a, #0x0F
+    add a, #0x30
+    lcall putchar
+    mov R7, #1
+Serial_Skip_Tens:
+
+    ; Print Ones (always)
+    mov a, bcd+0
+    anl a, #0x0F
+    add a, #0x30
+    lcall putchar
+
+    ; Print 'C' and newline
+    mov a, #'C'
+    lcall putchar
+    mov a, #0DH     ; CR
+    lcall putchar
+    mov a, #0AH     ; LF
+    lcall putchar
+    ret
 
 ;-----------------------------------------------------------------------------------------------;
 $include(..\inc\Timer2_ISR.inc) ; Timer 2 ISR for 1ms tick and pwm signal generation
@@ -379,6 +469,19 @@ Hex_to_bcd_8bit:
 ;-------------------------------------------------------------------------------
 ; Display Function for LCD                      
 ;-------------------------------------------------------------------------------
+LCD_Print_2Digits:
+    lcall Hex_to_bcd_8bit
+    mov a, R0
+    swap a
+    anl a, #0x0F
+    add a, #0x30
+    lcall ?WriteData
+    mov a, R0
+    anl a, #0x0F
+    add a, #0x30
+    lcall ?WriteData
+    ret
+
 LCD_Display_Update_func:
     push acc
     
@@ -490,6 +593,9 @@ LCD_Update_Temp_Value:
     mov x+2, current_temp+2
     mov x+3, current_temp+3
     lcall hex2bcd
+
+    ; Update HEX2-HEX0 with temperature
+    lcall Update_HEX_Temp
     
     ; Print Hundreds
     mov a, bcd+1
@@ -518,6 +624,18 @@ LCD_Update_Temp_Value:
     mov a, #' '
     lcall ?WriteData
     lcall ?WriteData
+
+    ; Print time MM:SS at bottom right
+    Set_Cursor(2, 12)
+    mov a, current_time_minute
+    lcall LCD_Print_2Digits
+    mov a, #':'
+    lcall ?WriteData
+    mov a, current_time_sec
+    lcall LCD_Print_2Digits
+
+    ; Mirror temp to serial (PuTTY/screen)
+    lcall Serial_Send_Temp_Line
 
 LCD_Done:
     pop acc
@@ -619,7 +737,6 @@ Normal_Cursor:
     mov A, Cursor_Idx
     add A, #0xC0
     lcall ?WriteCommand
-    ret
 
 Adjust_Cursor_Time:
     ; Skip the colon index (2)
@@ -672,6 +789,29 @@ Get_Buf_3:
     ret
 Get_Buf_4:
     mov R0, #Buf_Refl_Time
+    ret
+
+;-------------------------------------------------------------------------------
+; Update HEX2-HEX0 with temperature (3 digits)
+;-------------------------------------------------------------------------------
+Update_HEX_Temp:
+    mov dptr, #T_7seg
+    ; Hundreds -> HEX2
+    mov a, bcd+1
+    anl a, #0x0F
+    movc a, @a+dptr
+    mov HEX2, a
+    ; Tens -> HEX1
+    mov a, bcd+0
+    swap a
+    anl a, #0x0F
+    movc a, @a+dptr
+    mov HEX1, a
+    ; Ones -> HEX0
+    mov a, bcd+0
+    anl a, #0x0F
+    movc a, @a+dptr
+    mov HEX0, a
     ret
     
 ;---------------------------------------------------------
@@ -1122,20 +1262,28 @@ Safety_Check_TC:
     push AR1
     push AR2
 
-    ; If already aborted or startup window closed, do nothing
-    jb   tc_missing_abort, Safety_TC_Done
-    jnb  tc_startup_window, Safety_TC_Done
+    ; ---------------------------------------------------------
+    ; [FIX] GATEKEEPER: IGNORE UNLESS IN STATE 2 (RAMP TO SOAK)
+    ; ---------------------------------------------------------
+    mov a, Control_FSM_state
+    cjne a, #2, Safety_TC_Exit_Bridge ; If State != 2, skip everything
+    sjmp Safety_Logic_Proceed         ; If State == 2, do the check
+
+    Safety_TC_Exit_Bridge:
+        ljmp Safety_TC_Done               ; Jump to the end
+
+    Safety_Logic_Proceed:
+        ; If already aborted or startup window closed, do nothing
+        jb   tc_missing_abort, Safety_TC_Done
+        jnb  tc_startup_window, Safety_TC_Done
 
     ; Check: elapsed >= 60 seconds ?
     mov  a, current_time_minute
     jnz  Safety_TC_At60          ; if minute >= 1, definitely >=60s
 
-    mov  a, current_time_sec
-    clr  c
-    subb a, #60
-    jc   Safety_TC_Done          ; still < 60s
-
-Safety_TC_At60:
+    Load_Y(60)
+    lcall x_lt_y
+    jb   mf, Safety_TC_Exit_Bridge        ; still < 60s → keep waiting
 
     ; We reached 60s: close the startup window so it won't re-check later
     clr  tc_startup_window
@@ -1147,12 +1295,21 @@ Safety_TC_At60:
 
     Load_Y(50)
     lcall x_lt_y
-    jnb  mf, Safety_TC_Done        ; temp >= 50 → pass
+    jnb  mf, Safety_TC_Exit_Bridge        ; temp >= 50 → pass
 
     ; FAIL: at 60s, still below 50C → abort
+    clr  PWM_OUT
     setb tc_missing_abort
     setb stop_signal
-    clr  PWM_OUT
+	lcall Beep_Ten
+    ; 3. Force FSM to State 0 (Welcome)
+    mov Control_FSM_state, #0
+    
+    ; 4. Force UI to State 0 (Home Screen)
+    mov Current_State, #0
+    
+    ; 5. Trigger Screen Refresh
+    setb state_change_signal ; Tell loop to redraw "Welcome"
 
 Safety_TC_Done:
     pop  AR2
@@ -1161,6 +1318,91 @@ Safety_TC_Done:
     pop  psw
     pop  acc
     ret
+
+; ============================================================
+; BUZZER STARTUP FUNCTIONS
+; ============================================================
+
+Beep_Once:
+    mov beep_count, #1
+    sjmp Beep_Start
+
+Beep_Five:
+    mov beep_count, #5
+    sjmp Beep_Start
+
+Beep_Ten:
+    mov beep_count, #10
+    sjmp Beep_Start      ; [FIX] Added explicit jump for safety
+
+Beep_Start:
+    clr TR0              ; [FIX] Stop timer briefly to reset cleanly
+    mov beep_state, #1   ; Set State to ON
+    mov beep_tmr, #0     ; Reset Timer High Byte
+    mov beep_tmr+1, #0   ; Reset Timer Low Byte
+    setb ET0             ; [FIX] Ensure Interrupt is enabled
+    setb TR0             ; START the 2kHz tone
+    ret
+;============================================================
+
+;============================================================
+; Buzzer beep Task 
+; Purpose: beeps, holds, stop
+; Buzzer task:
+; Beep once when state changes
+; Beep five times if finished
+; Beep ten times if meets error
+;============================================================
+
+Beep_Task:
+    jnb one_ms_beep_flag, Beep_Done
+    clr one_ms_beep_flag
+
+    mov a, beep_state
+    jz Beep_Done
+
+; ---- increment 16-bit timer ----
+    inc beep_tmr
+    mov a, beep_tmr
+    jnz Beep_Check
+    inc beep_tmr+1
+
+Beep_Check:
+    ; [FIX] FUZZY TIMER CHECK
+    ; Check if High Byte is non-zero (Time >= 256ms)
+    mov a, beep_tmr+1
+    jz Beep_Done        ; If 0, keep beeping
+
+    ; --- Time Limit Reached ---
+    mov beep_tmr, #0    ; Reset timer
+    mov beep_tmr+1, #0
+
+    mov a, beep_state
+    cjne a, #1, Beep_Off_State
+
+    ; State was 1 (ON) -> Turn OFF
+    clr TR0             ; Hardware Silence
+    mov beep_state, #2  ; Set State to OFF (Pause)
+    ret
+
+Beep_Off_State:
+; ---- OFF finished -> decrement count / next ON ----
+    dec beep_count
+    mov a, beep_count
+    jz  Beep_Stop
+
+    mov beep_state, #1
+    setb TR0
+    ret
+
+Beep_Stop:
+    clr TR0
+    mov beep_state, #0
+    ret
+
+Beep_Done:
+    ret
+;==================================================================
 
 ;-------------------------------------------------------------------------------;
 ; Main Control FSM for the entire process
@@ -1211,9 +1453,12 @@ Control_FSM_state2:
     jnb PB2_flag, State2_Check
     clr PB2_flag
     ljmp Control_FSM_state6_a ; Pause
+
 State2_Check:
 	lcall Temp_Compare
     jnb soak_temp_reached, State2_Ret
+    
+    ; --- We reached Temp! Move to State 3 ---
     clr soak_temp_reached
     clr soak_time_reached
 	sjmp Control_FSM_state3_a
@@ -1767,25 +2012,35 @@ Reset_Chk_4:
     ret 
     
 ; ================================================================
-; MODULE: THERMOCOUPLE ADC DRIVER
+; MODULE: THERMOCOUPLE ADC DRIVER (WITH NOISE SUPPRESSION & JUMP FIX)
 ; ================================================================
 Read_Thermocouple:
-    ; 1. Check Non-Blocking Timer (Run once every 25ms)
+    ; 1. Check Non-Blocking Timer
     lcall Wait_25ms
-    jnc Read_TC_Exit ; If 25ms hasn't passed, exit immediately
     
+    ; [FIX] TRAMPOLINE JUMP
+    ; "jnc" cannot jump to the end because the code is too long.
+    ; We invert logic: If Carry=1 (Time is up), Jump NEARBY.
+    jc Proceed_Reading
+    ret  ; If Carry=0, Return immediately.
+
+Proceed_Reading:
     ; --- 25ms Passed! Time to Read ---
-    
+
+    ; [FIX] SILENCE THE BUZZER (Noise Suppression)
+    ; Save buzzer state and force it OFF during the sensitive read
+    mov A, TCON      
+    anl A, #0x10     ; Isolate TR0 bit
+    push acc         ; Save it
+    clr TR0          ; STOP NOISE
+
     ; 2. Initialize / Trigger ADC
-    ; Writing to ADC_C (0xA1) triggers the conversion
-    mov ADC_C, #0x80    ; Reset / Strobe
+    mov ADC_C, #0x80    ; Reset
     nop
     nop
-    mov ADC_C, #0x00    ; Select Channel 0 (ADCINPUT 0) and Start
+    mov ADC_C, #0x01    ; Start Channel 0
     
-    ; 3. [FIX] Settle Delay
-    ; The DE10-Lite ADC bridge needs time to fetch data from the MAX10 chip.
-    ; We burn ~500 cycles to be absolutely safe.
+    ; 3. Settle Delay
     mov R5, #250
 ADC_Settle_Loop:
     nop
@@ -1793,37 +2048,47 @@ ADC_Settle_Loop:
     djnz R5, ADC_Settle_Loop
     
     ; 4. Read Raw Data
-    mov x+0, ADC_L      ; Read Low Byte (0xA2)
-    mov x+1, ADC_H      ; Read High Byte (0xA3)
+    mov x+0, ADC_L
+    mov x+1, ADC_H
     mov x+2, #0
     mov x+3, #0
     
-    ; 5. [FIX] Mask the 12-bit Data
-    ; The ADC is 12-bit. We MUST zero out the upper 4 bits of the High Byte
-    ; or the math below will overflow and return 0.
+    ; 5. Mask Data
     mov a, x+1
     anl a, #0x0F
     mov x+1, a
     
-    ; 6. Convert to Voltage (Count * 5000 / 4095)
-    Load_y(5000)        ; Vref = 5000mV
-    lcall mul32         
+    ; [FIX] RESTORE THE BUZZER
+    pop acc          ; Get previous state
+    jz Skip_Restore  ; If it was OFF, keep it OFF
+    setb TR0         ; If it was ON, turn it back ON
+Skip_Restore:
+
+    ; 6. Math Conversions
+    Load_y(4118)
+    lcall mul32       
+
+    mov ADC_C, #0x04    ; Read LM4040
+    mov y+0, ADC_L      
+    mov y+1, ADC_H      
+    mov y+2, #0
+    mov y+3, #0
+    mov ADC_C, #0x00    ; Reset
     
-    Load_y(4095)        ; 12-bit resolution
     lcall div32         
+    Load_Y(100)
+    lcall mul32
+    Load_y(1323)        
+    lcall div32    
+    Load_y(COLD_JUNCTION_TEMP)
+    lcall add32     
     
-    ; 7. Convert to Temp (Voltage / 10mV) -> e.g. 250mV / 10 = 25C
-    ; Change this Load_y value if your amp gain is different!
-    Load_y(10)          
-    lcall div32         
-    
-    ; 8. Store Final Result
+    ; 8. Store Result
     mov current_temp+0, x+0
     mov current_temp+1, x+1
     mov current_temp+2, x+2
     mov current_temp+3, x+3
 
-Read_TC_Exit:
     ret
     
 ; ================================================================
@@ -1884,6 +2149,333 @@ Set_20_Percent_Power:
     mov power_output+2, #0
     mov power_output+3, #0
     ret
+
+;--------------------------------------------------------------
+; set servo angle according to the state
+; call servo control function every 1ms
+;--------------------------------------------------------------
+call_servo_control:
+	; check current state and change servo angle
+	mov a, Control_FSM_state
+	
+	; handle state 0
+	cjne a, #0, servo_state1
+	clr servo_angle_zero ; close door at state 0
+	sjmp check_servo_flag
+
+	; handle state 1
+	servo_state1:
+	cjne a, #1, servo_state2
+	setb servo_angle_zero ; open door at state 1
+	sjmp check_servo_flag
+
+	; handle state 2
+	servo_state2:
+	cjne a, #2, servo_state3
+	clr servo_angle_zero ; close door at state 2
+	sjmp check_servo_flag
+
+	; handle state 3
+	servo_state3:
+	cjne a, #3, servo_state4
+	clr servo_angle_zero ; close door at state 3
+	sjmp check_servo_flag
+
+	; handle state 4
+	servo_state4:
+	cjne a, #4, servo_state5
+	clr servo_angle_zero ; close door at state 4
+	sjmp check_servo_flag
+
+	; handle state 5
+	servo_state5:
+	cjne a, #5, servo_state6
+	clr servo_angle_zero ; close door at state 5
+	sjmp check_servo_flag
+
+	; handle state 6
+	servo_state6:
+	cjne a, #6, servo_state7
+	clr servo_angle_zero ; close door at state 6
+	sjmp check_servo_flag
+
+	; handle state 7
+	servo_state7:
+	setb servo_angle_zero ; open door at state 7
+
+check_servo_flag:
+	; check 1 ms flag
+	jbc one_millisecond_flag_servo, run_servo_control
+	ret
+
+run_servo_control:
+	lcall servo_control
+	ret
+
+
+;---------------------------------------------------------------
+; servo control
+; generate a 20 ms period pwm signal to control the servo motor
+; able to make the servo motor stay at 0 degree and 180 degree
+;---------------------------------------------------------------
+servo_control:
+    setb LEDRA.5
+	push acc
+	push psw
+	mov a, servo_pwm_counter ; move servo counter to accumulator
+	inc A ; a += 1
+	cjne a, #SERVO_PERIOD, servo_pwm_angle_compare ; jump if wrapup not needed
+	mov a, #0
+
+servo_pwm_angle_compare: ; read target angle
+	mov servo_pwm_counter, A
+	jb servo_angle_zero, set_zero_degree ; set servo motor to 0 degree
+	; set servo motor to 180 degrees
+	mov a, servo_pwm_counter
+	clr c
+	subb a, #SERVO_180
+	jc servo_pwm_set_high ; set high if servo pwm counter smaller than 180 degrees duty cycle
+	sjmp servo_pwm_set_low ; set low if greater
+
+set_zero_degree:
+	; set servo motor to 0 degree
+	mov a, servo_pwm_counter
+	clr c
+	subb a, #SERVO_0
+	jc servo_pwm_set_high ; set high if servo pwm counter smaller than 0 degrees duty cycle
+	sjmp servo_pwm_set_low ; set low if greater
+
+servo_pwm_set_high:
+	; set pwm pin high
+	setb SERVO_OUT
+	sjmp servo_control_done
+
+servo_pwm_set_low:
+	; set pwm pin low
+	clr SERVO_OUT
+
+servo_control_done:
+	pop psw
+	pop acc
+	ret
+
+;-------------------------------------------------------------------------------
+; power_control
+;-------------------------------------------------------------------------------
+; Determine the power output based on current state and current temperature 
+; input parameter: Control_FSM_state
+;-------------------------------------------------------------------------------
+
+proportional_power_control:
+	mov a, Control_FSM_state
+
+state0_power_control:
+	; idle
+	; 0% power
+	cjne a, #0, state1_power_control
+	mov power_output, #low(NO_POWER)
+	mov power_output+1, #low(NO_POWER)
+	mov power_output+2, #0
+	mov power_output+3, #0
+	ljmp power_control_done
+
+state1_power_control:
+	; idle
+	; 0% power
+	cjne a, #1, state2_power_control
+	mov power_output, #low(NO_POWER)
+	mov power_output+1, #low(NO_POWER)
+	mov power_output+2, #0
+	mov power_output+3, #0
+	ljmp power_control_done
+	
+state2_power_control:
+	; ramp to soak, ramp to ~150C
+	; 100% power
+	cjne a, #2, state3_power_control
+	mov power_output, #low(MAX_POWER)
+	mov power_output+1, #high(MAX_POWER)
+	mov power_output+2, #0
+	mov power_output+3, #0
+	ljmp power_control_done
+
+state3_power_control:
+	; soak period, hold at 150C
+	; 20% base power + proportional calculated power
+	cjne a, #3, jump_state4_power_control
+	sjmp state3_power_control_calculation
+
+jump_state4_power_control:
+	ljmp state4_power_control
+
+state3_power_control_calculation:
+	; move soak_temp to x
+	mov x, soak_temp
+	mov x+1, soak_temp+1
+	mov x+2, soak_temp+2
+	mov x+3, soak_temp+3
+	; move current_temp to y
+	mov y, current_temp
+	mov y+1, current_temp+1
+	mov y+2, current_temp+2
+	mov y+3, current_temp+3
+
+	; compare between soak_temp and current_temp
+	clr mf
+	lcall x_gteq_y
+	jbc mf, st_sub_ct
+	; current_temp - soak_temp if st < ct
+	clr soak_temp_greater
+	; move current_temp to y
+	mov y, soak_temp
+	mov y+1, soak_temp+1
+	mov y+2, soak_temp+2
+	mov y+3, soak_temp+3
+	; move current_temp to x
+	mov x, current_temp
+	mov x+1, current_temp+1
+	mov x+2, current_temp+2
+	mov x+3, current_temp+3
+	lcall sub32
+	mov soak_temp_diff, x
+	mov soak_temp_diff+1, x+1
+	mov soak_temp_diff+2, x+2
+	mov soak_temp_diff+3, x+3
+	sjmp proportional_input_soak
+
+st_sub_ct:
+	; soak_temp - current_temp
+	setb soak_temp_greater
+	lcall sub32
+	mov soak_temp_diff, x
+	mov soak_temp_diff+1, x+1
+	mov soak_temp_diff+2, x+2
+	mov soak_temp_diff+3, x+3
+
+proportional_input_soak:
+	; proportaional block calculation	
+	; move soak_temp_diff to x
+	mov x, soak_temp_diff
+	mov x+1, soak_temp_diff+1
+	mov x+2, soak_temp_diff+2
+	mov x+3, soak_temp_diff+3
+	; move proportional gain to y
+	Load_Y(KP)
+	lcall mul32 ; proportional_output = proportional_gain * difference
+	
+	mov proportional_gain_var, x
+	mov proportional_gain_var+1, x+1
+	mov proportional_gain_var+2, x+2
+	mov proportional_gain_var+3, x+3
+
+	; base_power + soak_power when soak_temp > current_temp
+	jnb soak_temp_greater, sub_proportional_soak
+	mov x, proportional_gain_var
+	mov x+1, proportional_gain_var+1
+	mov x+2, proportional_gain_var+2
+	mov x+3, proportional_gain_var+3
+	Load_Y(BASE_POWER)
+	lcall add32
+	; x now holds the power output before the saturator
+	mov proportional_gain_var, x
+	mov proportional_gain_var+1, x+1
+	mov proportional_gain_var+2, x+2
+	mov proportional_gain_var+3, x+3
+	sjmp saturator_soak
+
+sub_proportional_soak:
+	; base_power - soak_power when soak_temp <= current_temp
+	Load_X(BASE_POWER)
+	mov y, proportional_gain_var
+	mov y+1, proportional_gain_var+1
+	mov y+2, proportional_gain_var+2
+	mov y+3, proportional_gain_var+3
+
+	; compare whether base_power < proportional_gain_var
+	clr mf
+	lcall x_lt_y ; set mf to 1 if base_power < proportional_gain_var, clamp output to 0
+	jnb mf, bp_gteq_pgv
+	mov proportional_gain_var, #low(NO_POWER)
+	mov proportional_gain_var+1, #high(NO_POWER)
+	mov proportional_gain_var+2, #0
+	mov proportional_gain_var+3, #0
+	sjmp saturator_soak
+
+bp_gteq_pgv:
+	; calculate subtracted gain
+	lcall sub32
+	; x now holds the power output before the saturator
+	mov proportional_gain_var, x
+	mov proportional_gain_var+1, x+1
+	mov proportional_gain_var+2, x+2
+	mov proportional_gain_var+3, x+3
+
+saturator_soak:
+	; proportional_gain_var now holds the power output before the saturator
+	; saturate power output to max power
+	mov x, proportional_gain_var
+	mov x+1, proportional_gain_var+1
+	mov x+2, proportional_gain_var+2
+	mov x+3, proportional_gain_var+3
+
+	Load_Y(MAX_POWER)
+
+	clr mf
+	lcall x_gt_y ; set mf to 1 if calculated power output greater than max power
+	jb mf, saturated_soak
+	; set power_output to calculated power if not saturated
+	mov power_output, proportional_gain_var
+	mov power_output+1, proportional_gain_var+1
+	mov power_output+2, proportional_gain_var+2
+	mov power_output+3, proportional_gain_var+3
+	ljmp power_control_done
+
+saturated_soak:
+	mov power_output, #low(MAX_POWER)
+	mov power_output+1, #high(MAX_POWER)
+	mov power_output+2, #0
+	mov power_output+3, #0
+	ljmp power_control_done
+
+
+state4_power_control:
+	; ramp to reflow, max power
+	cjne a, #4, state5_power_control
+	mov power_output, #low(MAX_POWER)
+	mov power_output+1, #high(MAX_POWER)
+	mov power_output+2, #0
+	mov power_output+3, #0
+	ljmp power_control_done
+
+state5_power_control:
+	; reflow 20% base power
+	cjne a, #5, state6_power_control
+	mov power_output, #low(BASE_POWER)  
+	mov power_output+1, #high(BASE_POWER)
+	mov power_output+2, #0
+	mov power_output+3, #0
+	ljmp power_control_done
+
+state6_power_control:
+	; cooling 0% power
+	cjne a, #6, state_7_power_control
+	mov power_output, #low(NO_POWER)
+	mov power_output+1, #high(NO_POWER)
+	mov power_output+2, #0
+	mov power_output+3, #0
+	ljmp power_control_done
+
+state_7_power_control:
+	; idle 0% power
+	mov power_output, #low(NO_POWER)
+	mov power_output+1, #high(NO_POWER)
+	mov power_output+2, #0
+	mov power_output+3, #0
+
+power_control_done:
+	ret
+
+END
 
 ;-------------------------------------------------------------------------------;
 ;         Main program.          
@@ -1968,6 +2560,13 @@ Reset_Delay_Inner:
 	mov	PB2_DEB_state, #0
 	mov	PB0_DEB_timer, #0
 	mov	PB2_DEB_timer, #0
+    ; [FIX] ADD THIS BLOCK TO STOP STARTUP BEEP
+    mov beep_state, #0
+    mov beep_count, #0
+    mov beep_tmr, #0
+    mov beep_tmr+1, #0
+    clr one_ms_beep_flag
+    clr TR0 ; Force buzzer hardware OFF
 
 	; Clear all the flags
 	clr SOUND_OUT
@@ -2005,6 +2604,13 @@ Reset_Delay_Inner:
 ; while(1) loop
 ;-------------------------------------------------------------------------------;
 loop:
+    ; Full reset button on P3.7 (active-low to GND)
+    jnb P3_7, Full_Reset_Trig
+    sjmp Full_Reset_Check_Done
+Full_Reset_Trig:
+    ljmp Full_Reset
+
+Full_Reset_Check_Done:
 	lcall SEC_FSM
 	;lcall FSM_test
 
@@ -2019,12 +2625,13 @@ loop:
     lcall Read_Thermocouple
     
     ; 1. Check if we reached temp (Observer)
-    ;lcall Temp_Compare
+    lcall Temp_Compare
     
     ; 2. Decide heater power based on flags (Driver)
-    lcall Power_Control
+    ;lcall Power_Control
+    lcall proportional_power_control
     
-    ;lcall Safety_Check_TC
+    lcall Safety_Check_TC
 
 	lcall Time_Counter
 
@@ -2048,6 +2655,16 @@ loop:
 
     ; Update the pwm output for the ssr
     lcall PWM_Wave 
+
+    jnb one_ms_pwm_flag, Skip_Beep_Sync
+    setb one_ms_beep_flag  ; Give the buzzer its own copy of the time tick
+Skip_Beep_Sync:
+    ; Update the pwm output for the ssr
+    lcall PWM_Wave 
+	; Update the Buzzer 
+	lcall Beep_Task
+    ; Update the pwm output for the servo
+    lcall call_servo_control
 
     ; After initialization the program stays in this 'forever' loop
     ljmp loop
