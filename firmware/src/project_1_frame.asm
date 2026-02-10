@@ -18,7 +18,7 @@ org 0x001B
     reti
 ; Serial port receive/transmit interrupt vector
 org 0x0023 
-    reti
+    ljmp Serial_ISR
 ; Timer/Counter 2 overflow interrupt vector
 org 0x002B
     ljmp Timer2_ISR
@@ -79,6 +79,11 @@ beep_state:  ds 1      ; 0=idle, 1=ON, 2=OFF
 beep_tmr:    ds 2      ; 16-bit ms timer (needs to reach 500)
 
 servo_pwm_counter: ds 1 ; counter for the servo pwm signal
+
+; --- ADD THIS FOR GUI ---
+rx_buffer:    ds 8    ; Stores "S:150"
+rx_index:     ds 1    ; Current char index
+cmd_received: ds 1    ; Flag: 1 = Command ready
 
 iseg at 0x80
 Buf_Soak_Temp: ds 4   
@@ -260,23 +265,24 @@ Timer0_ISR:
 
 ; Routine to initialize the serial port at 57600 baud (Timer 1 in mode 2)
 Initialize_Serial_Port:
-    ; Configure serial port and baud rate
-    clr TR1 ; Disable timer 1
-    anl TMOD, #0x0f ; Mask the bits for timer 1
-    orl TMOD, #0x20 ; Set timer 1 in 8-bit auto reload mode
-    orl PCON, #80H ; Set SMOD to 1
+    clr TR1             ; Disable timer 1
+    anl TMOD, #0x0f     ; Mask the bits for timer 1
+    orl TMOD, #0x20     ; Set timer 1 in 8-bit auto reload mode
+    orl PCON, #80H      ; Set SMOD to 1
     mov TH1, #low(TIMER_1_RELOAD)
     mov TL1, #low(TIMER_1_RELOAD) 
-    setb TR1 ; Enable timer 1
-    mov SCON, #52H
+    setb TR1            ; Enable timer 1
+    mov SCON, #50H      ; <--- CHANGED (Mode 1, REN=1, TI=0, RI=0)
+    setb ES
     ret
 
 ; uart sending functions
 putchar:
-    jbc TI, putchar_L1
-    sjmp putchar
-putchar_L1:
-    mov SBUF,a
+    clr ES        ; 1. Turn OFF Serial Interrupts (Silence!)
+    mov SBUF, a   ; 2. Load the data to send
+    jnb TI, $     ; 3. Wait here until hardware says "Done" (Blocking)
+    clr TI        ; 4. Clear the flag manually
+    setb ES       ; 5. Turn ON Serial Interrupts again (Listen for Python)
     ret
 
 SendString:
@@ -1133,9 +1139,10 @@ Control_FSM_state0_a:
 	
 Control_FSM_state0:
     cjne a, #0, Control_FSM_state1
-    jb P1.0, Control_FSM_done_bridge ; If Button High (Not Pressed), Exit
-    lcall Wait_For_P1_0_Release      ; If Low (Pressed), Wait & Proceed
-    sjmp Control_FSM_state1_a  
+
+    jnb Key1_flag, Control_FSM_done_bridge ; If Key1 not pressed, exit
+    clr Key1_flag                          ; Clear the flag
+    sjmp Control_FSM_state1_a              ; Jump to Start Oven
     
 Control_FSM_done_bridge:
     ret
@@ -1343,9 +1350,6 @@ Reset_Delay_Inner:
     mov LEDRA, #0 ; LEDRA is bit addressable
     mov LEDRB, #0 ; LEDRB is NOT bit addresable
 
-    ; Enable Global interrupts
-    setb EA  
-
     ; FSM initial states
     mov KEY1_DEB_state, #0
     mov SEC_FSM_state, #0
@@ -1368,6 +1372,10 @@ Reset_Delay_Inner:
     mov power_output+2, #0
     mov power_output+1, #02H
     mov power_output, #0EEH ; (initilize to 750 for testing)
+
+    ; --- ADD THIS TO CLEAN SERIAL VARIABLES ---
+    mov rx_index, #0
+    mov cmd_received, #0
 
     ; Clear all the flags
     clr  tc_missing_abort
@@ -1407,9 +1415,12 @@ Reset_Delay_Inner:
     lcall ELCD_4BIT
     ;----- Two new lines I added to initialize the UI
     lcall Init_All_Buffers
-    lcall Update_Screen_Full
+    ;lcall Update_Screen_Full
     ;-----
     lcall Initialize_Serial_Port
+
+    ; Enable Global interrupts
+    setb EA  
 ;-------------------------------------------------------------------------------;
 ; while(1) loop
 ;-------------------------------------------------------------------------------;
@@ -1422,6 +1433,9 @@ Full_Reset_Trig:
     ljmp Full_Reset
 
 Full_Reset_Check_Done:
+
+    lcall Process_Serial_Command
+
     ; Check the FSM for KEY1 debounce
     lcall KEY1_DEB
     
@@ -2544,5 +2558,174 @@ state_7_power_control:
 
 power_control_done:
 	ret
+
+; ================================================================
+; SERIAL COMMUNICATION BLOCK (Paste before END)
+; ================================================================
+
+; ----------------------------------------------------------------
+; ----------------------------------------------------------------
+; ISR: Catch incoming characters from Python
+; ----------------------------------------------------------------
+Serial_ISR:
+    push acc
+    push psw
+    push AR0
+    
+    ; --- CRITICAL FIX: Check & Clear Transmit Flag ---
+    jnb TI, Check_RI      ; If TI is 0, check RX
+    clr TI                ; CLEAR TI! (Stops the infinite loop)
+    sjmp Serial_Done_Safe ; Exit immediately (We don't need to read anything for TX)
+
+Check_RI:
+    jnb RI, Serial_Done_Safe ; If RX is also 0, just exit
+    clr RI                   ; Clear RX flag
+
+    mov a, SBUF              ; Read character
+    
+    ; Check for Newline (End of Command)
+    cjne a, #10, Check_CR   
+    sjmp End_Of_Command
+Check_CR:
+    cjne a, #13, Store_Char 
+    sjmp End_Of_Command
+
+Store_Char:
+    ; Safety limit 7 chars
+    mov a, rx_index
+    cjne a, #7, Save_It
+    sjmp Serial_Done_Safe
+Save_It:
+    mov R0, #rx_buffer
+    add a, R0
+    mov R0, a
+    mov a, SBUF
+    mov @R0, a
+    inc rx_index
+    sjmp Serial_Done_Safe
+
+End_Of_Command:
+    ; Null-terminate string
+    mov a, rx_index
+    mov R0, #rx_buffer
+    add a, R0
+    mov R0, a
+    mov @R0, #0
+    
+    mov rx_index, #0        ; Reset
+    mov cmd_received, #1    ; Flag Main Loop
+
+Serial_Done_Safe:           ; <--- Renamed label to avoid "Redefine Symbol" errors
+    pop AR0
+    pop psw
+    pop acc
+    reti
+
+; ----------------------------------------------------------------
+; PROCESSOR: Apply the command to variables
+; ----------------------------------------------------------------
+Process_Serial_Command:
+    ; --- CHECK FLAG (BYTE SAFE) ---
+    mov a, cmd_received
+    jz Serial_Ret         ; If 0, exit
+    ; ------------------------------
+
+    mov cmd_received, #0  ; Clear flag
+
+    mov R0, #rx_buffer
+    mov a, @R0            ; Load Command Letter
+    
+    ; S = Soak Temp
+    cjne a, #'S', Check_K
+    inc R0 ; Skip S
+    inc R0 ; Skip :
+    lcall Parse_Serial_Num
+    mov soak_temp+0, R7
+    mov soak_temp+1, #0
+    sjmp Serial_Ret
+
+Check_K: ; K = Soak Time
+    cjne a, #'K', Check_R
+    inc R0 ; Skip K
+    inc R0 ; Skip :
+    lcall Parse_Serial_Num
+    mov soak_time+0, R7
+    mov soak_time+1, #0
+    sjmp Serial_Ret
+
+Check_R: ; R = Reflow Temp
+    cjne a, #'R', Check_L
+    inc R0 ; Skip R
+    inc R0 ; Skip :
+    lcall Parse_Serial_Num
+    mov reflow_temp+0, R7
+    mov reflow_temp+1, #0
+    sjmp Serial_Ret
+
+Check_L: ; L = Reflow Time
+    cjne a, #'L', Check_Run
+    inc R0 ; Skip L
+    inc R0 ; Skip :
+    lcall Parse_Serial_Num
+    mov reflow_time+0, R7
+    mov reflow_time+1, #0
+    sjmp Serial_Ret
+
+Check_Run: ; RUN:1 or RUN:0
+    ; We check the character at index 4 (R, U, N, :, [1])
+    mov R0, #rx_buffer
+    inc R0 ; R
+    inc R0 ; U
+    inc R0 ; N
+    inc R0 ; :
+    mov a, @R0 ; '1' or '0'
+    
+    cjne a, #'1', Stop_Oven
+    
+    ; START
+    mov Control_FSM_state, #2
+    mov current_time_sec, #0
+    mov current_time_minute, #0
+    setb tc_startup_window
+    clr tc_missing_abort
+    sjmp Serial_Ret
+
+Stop_Oven:
+    mov Control_FSM_state, #0
+    mov Current_State, #0
+    setb state_change_signal
+
+Serial_Ret:
+    ret
+
+; ----------------------------------------------------------------
+; HELPER: ASCII to Integer
+; ----------------------------------------------------------------
+Parse_Serial_Num:
+    mov R7, #0
+Parse_Next:
+    mov A, @R0
+    jz Parse_Done           ; Null terminator = done
+    cjne A, #10, Chk_13
+    sjmp Parse_Done
+Chk_13:
+    cjne A, #13, Do_Conv
+    sjmp Parse_Done
+
+Do_Conv:
+    clr C
+    subb A, #0x30           ; ASCII to Int
+    mov R5, A
+    
+    mov A, R7
+    mov B, #10
+    mul AB
+    add A, R5
+    mov R7, A
+    
+    inc R0
+    sjmp Parse_Next
+Parse_Done:
+    ret
 
 END
