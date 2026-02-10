@@ -37,6 +37,7 @@ Timer2_ISR:
 
     inc PB0_DEB_timer
     inc PB2_DEB_timer
+    inc BTN_DEB_timer
     setb one_ms_beep_flag
     setb one_millisecond_flag_servo
 

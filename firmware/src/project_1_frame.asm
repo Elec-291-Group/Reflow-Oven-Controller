@@ -86,6 +86,9 @@ PB0_DEB_timer:  ds 1
 PB0_DEB_state:  ds 1
 PB2_DEB_timer:  ds 1
 PB2_DEB_state:  ds 1
+BTN_DEB_state:  ds 1   ;- state machine state (0-3)
+BTN_DEB_timer:  ds 1   ;- debounce timer (incremented by ISR every 1ms)
+BTN_DEB_id:     ds 1   ;- which button was pressed (1-4)
 
 ; Buzzer state
 beep_count:  ds 1      ; remaining beeps
@@ -797,7 +800,9 @@ Update_HEX_Temp:
     mov HEX0, a
     ret
     
-;---------------------------------------------------------
+; ----------------------------------------------------------------
+; MODULE: BUTTON HANDLER 
+; ----------------------------------------------------------------
 PB0_DEB:
 ;non-blocking state machine for PB0 debounce
     mov a, PB0_DEB_state
@@ -861,6 +866,148 @@ PB2_DEB_state3:
     setb PB2_flag ; Suscesfully detected a valid PB2 press/release
     mov PB2_DEB_state, #0  
 PB2_DEB_done:
+    ret
+
+Check_Buttons:
+    push ACC
+    push PSW
+    
+    ; Only process in Control_FSM_state 1
+    mov a, Control_FSM_state
+    cjne a, #1, Check_Buttons_Done_bridge
+    
+    ; --- FORCE INPUT MODE ---
+    orl P0, #055H   ; Sets P0.0, P0.2, P0.4, P0.6 to '1' (Input Mode)
+    
+    mov a, BTN_DEB_state
+
+    sjmp BTN_DEB_state0
+Check_Buttons_Done_bridge:
+    ljmp Check_Buttons_Done
+
+; ============================================================
+; State 0: Wait for any button press
+; ============================================================
+BTN_DEB_state0:
+    cjne a, #0, BTN_DEB_state1
+    
+    ; Check each button, record which one was pressed
+    jnb BTN_SOAK_TEMP, BTN_Detect_SoakTemp
+    jnb BTN_SOAK_TIME, BTN_Detect_SoakTime
+    jnb BTN_REFL_TEMP, BTN_Detect_ReflTemp
+    jnb BTN_REFL_TIME, BTN_Detect_ReflTime
+    ljmp Check_Buttons_Done     ; No button pressed
+
+BTN_Detect_SoakTemp:
+    mov BTN_DEB_id, #1
+    sjmp BTN_Start_Debounce
+BTN_Detect_SoakTime:
+    mov BTN_DEB_id, #2
+    sjmp BTN_Start_Debounce
+BTN_Detect_ReflTemp:
+    mov BTN_DEB_id, #3
+    sjmp BTN_Start_Debounce
+BTN_Detect_ReflTime:
+    mov BTN_DEB_id, #4
+    sjmp BTN_Start_Debounce
+
+BTN_Start_Debounce:
+    mov BTN_DEB_timer, #0
+    inc BTN_DEB_state
+    sjmp Check_Buttons_Done
+
+; ============================================================
+; State 1: Debounce delay (wait 50ms)
+; ============================================================
+BTN_DEB_state1:
+    cjne a, #1, BTN_DEB_state2
+    mov a, BTN_DEB_timer
+    cjne a, #50, Check_Buttons_Done   ; Wait 50ms
+    inc BTN_DEB_state
+    sjmp Check_Buttons_Done
+
+; ============================================================
+; State 2: Verify button still pressed
+; ============================================================
+BTN_DEB_state2:
+    cjne a, #2, BTN_DEB_state3
+    
+    ; Check if the same button is still pressed
+    mov a, BTN_DEB_id
+    cjne a, #1, BTN_Verify_Check2
+    jnb BTN_SOAK_TEMP, BTN_Verify_OK
+    sjmp BTN_Verify_Fail
+BTN_Verify_Check2:
+    cjne a, #2, BTN_Verify_Check3
+    jnb BTN_SOAK_TIME, BTN_Verify_OK
+    sjmp BTN_Verify_Fail
+BTN_Verify_Check3:
+    cjne a, #3, BTN_Verify_Check4
+    jnb BTN_REFL_TEMP, BTN_Verify_OK
+    sjmp BTN_Verify_Fail
+BTN_Verify_Check4:
+    jnb BTN_REFL_TIME, BTN_Verify_OK
+    ; Fall through to fail
+
+BTN_Verify_Fail:
+    mov BTN_DEB_state, #0           ; Was noise, reset
+    sjmp Check_Buttons_Done
+
+BTN_Verify_OK:
+    inc BTN_DEB_state               ; Confirmed, wait for release
+    sjmp Check_Buttons_Done
+
+; ============================================================
+; State 3: Wait for button release, then trigger action
+; ============================================================
+BTN_DEB_state3:
+    cjne a, #3, Check_Buttons_Done
+    
+    ; Check if the button is released
+    mov a, BTN_DEB_id
+    cjne a, #1, BTN_Release_Check2
+    jnb BTN_SOAK_TEMP, Check_Buttons_Done   ; Still pressed, wait
+    sjmp BTN_Do_Action
+BTN_Release_Check2:
+    cjne a, #2, BTN_Release_Check3
+    jnb BTN_SOAK_TIME, Check_Buttons_Done
+    sjmp BTN_Do_Action
+BTN_Release_Check3:
+    cjne a, #3, BTN_Release_Check4
+    jnb BTN_REFL_TEMP, Check_Buttons_Done
+    sjmp BTN_Do_Action
+BTN_Release_Check4:
+    jnb BTN_REFL_TIME, Check_Buttons_Done
+    ; Fall through to action
+
+; ============================================================
+; Button Released - Execute Action
+; ============================================================
+BTN_Do_Action:
+    mov a, BTN_DEB_id
+    
+    cjne a, #1, BTN_Action_2
+    mov Current_State, #1           ; Soak Temp
+    sjmp BTN_Action_Complete
+BTN_Action_2:
+    cjne a, #2, BTN_Action_3
+    mov Current_State, #2           ; Soak Time
+    sjmp BTN_Action_Complete
+BTN_Action_3:
+    cjne a, #3, BTN_Action_4
+    mov Current_State, #3           ; Refl Temp
+    sjmp BTN_Action_Complete
+BTN_Action_4:
+    mov Current_State, #4           ; Refl Time
+
+BTN_Action_Complete:
+    mov Cursor_Idx, #0
+    setb fullscreen_update_signal   ; Trigger screen redraw
+    mov BTN_DEB_state, #0           ; Reset state machine
+
+Check_Buttons_Done:
+    pop PSW
+    pop ACC
     ret
 
 ; ------------------------------------------------------------------------------
@@ -1729,153 +1876,157 @@ Parse_Time_String:
     ret
 
 ; ----------------------------------------------------------------
-; MODULE: BUTTON HANDLER (Mode Selection)
+; MODULE: KEYPAD HANDLER (Non-Blocking Debounce FSM)
 ; ----------------------------------------------------------------
-; Blocking wrapper for LCD clear (keeps old behavior just for this)
-Wait_25ms_BLOCKING:
-    lcall Wait_25ms
-    jnc Wait_25ms_BLOCKING ; Keep jumping back until Done (C=1)
-    ret
+; Variables needed:
+;   KP_DEB_state    - state machine state (0-4)
+;   KP_DEB_timer    - debounce timer (incremented by ISR every 1ms)
+;   KP_key_value    - detected key value (0-15)
+;   KP_key_flag     - set when valid key detected
+; ----------------------------------------------------------------
+Check_Keypad:
+    push ACC
+    push PSW
+    
+    ; Only process in Control_FSM_state 1
+    mov a, Control_FSM_state
+    cjne a, #1, Keypad_Exit
 
-Check_Buttons:
-	push ACC
-	mov a, Control_FSM_state
-	cjne a, #1, Check_Buttons_ret
-
-    ; --- FORCE INPUT MODE ---
-    ; This clears any '0' the LCD library might have written to our buttons
-    orl P0, #055H   ; Sets P0.0, P0.2, P0.4, and P0.6 to '1' (Input Mode)
-    ; ------------------------
-
-    jnb BTN_SOAK_TEMP, Btn_Soak_Temp_Press
-    jnb BTN_SOAK_TIME, Btn_Soak_Time_Press
-    jnb BTN_REFL_TEMP, Btn_Refl_Temp_Press
-    jnb BTN_REFL_TIME, Btn_Refl_Time_Press
-
-	pop ACC
-    ret
-
-Btn_Soak_Temp_Press:
-    lcall Wait_25ms_BLOCKING
-    mov Current_State, #1
-    mov Cursor_Idx, #0
-    sjmp Redraw_Screen
-
-Btn_Soak_Time_Press:
-    lcall Wait_25ms_BLOCKING
-    mov Current_State, #2
-    mov Cursor_Idx, #0
-    sjmp Redraw_Screen
-
-Btn_Refl_Temp_Press:
-    lcall Wait_25ms_BLOCKING
-    mov Current_State, #3
-    mov Cursor_Idx, #0
-    sjmp Redraw_Screen
-
-Btn_Refl_Time_Press:
-    lcall Wait_25ms_BLOCKING 
-    mov Current_State, #4
-    mov Cursor_Idx, #0
-    sjmp Redraw_Screen
-
-Redraw_Screen:
-    ; Wait for button release
-    jnb BTN_SOAK_TEMP, $
-    jnb BTN_SOAK_TIME, $
-    jnb BTN_REFL_TEMP, $
-    jnb BTN_REFL_TIME, $
-
+    ; If Current_State is 0 (Home), ignore keypad
+    mov a, Current_State
+    jz Keypad_Exit
+    
+    ; Run the keypad state machine
+    lcall Keypad_FSM
+    
+    ; Check if a valid key was detected
+    jnb KP_key_flag, Keypad_Exit
+    clr KP_key_flag
+    
+    ; --- Process the key ---
+    mov a, KP_key_value
+    
+    ; Check Star (*) = 14: Reset Buffer
+    cjne a, #14, KP_Check_Hash
+    lcall Reset_Current_Buffer
     setb fullscreen_update_signal
-Check_Buttons_ret:
+    mov Cursor_Idx, #0
+    sjmp Keypad_Exit
+
+KP_Check_Hash:
+    ; Check Hash (#) = 12: Ignore
+    cjne a, #12, KP_Check_Numeric
+    sjmp Keypad_Exit
+
+KP_Check_Numeric:
+    ; Ensure key is 0-9
+    clr C
+    subb a, #10
+    jnc Keypad_Exit         ; >= 10, not numeric
+    
+    ; Convert to ASCII
+    mov a, KP_key_value
+    add a, #0x30
+    mov R5, a
+
+    ; Save to Buffer
+    lcall Get_Current_Buffer_Addr
+    mov a, Cursor_Idx
+    add a, R0
+    mov R0, a
+    mov a, R5
+    mov @R0, a
+    inc Cursor_Idx
+
+    ; --- Check Cursor Limits ---
+    mov a, Current_State
+    cjne a, #1, KP_Check_Limit_2
+    sjmp KP_Limit_Temp_3        ; State 1: Temp (3 digits)
+
+KP_Check_Limit_2:
+    cjne a, #3, KP_Limit_Time_4
+    sjmp KP_Limit_Temp_3        ; State 3: Temp (3 digits)
+
+KP_Limit_Temp_3:
+    mov a, Cursor_Idx
+    cjne a, #3, KP_Do_Refresh
+    dec Cursor_Idx              ; Stay at last digit
+    sjmp KP_Do_Refresh
+
+KP_Limit_Time_4:
+    mov a, Cursor_Idx
+    cjne a, #4, KP_Do_Refresh
+    dec Cursor_Idx              ; Stay at last digit
+
+KP_Do_Refresh:
+    setb fullscreen_update_signal
+
+Keypad_Exit:
+    pop PSW
     pop ACC
     ret
 
 ; ----------------------------------------------------------------
-; MODULE: KEYPAD HANDLER (Input Logic)
+; MODULE: KEYPAD FSM (Non-Blocking State Machine)
 ; ----------------------------------------------------------------
-Check_Keypad:
-    mov a, Control_FSM_state
-    cjne a, #1, Keypad_Exit
-
-    ; If State is 0 (Home), ignore keypad
-    mov A, Current_State
-    jz Keypad_Exit
-    
-    lcall Keypad_Scan
-    jnc Keypad_Exit         ; Carry = 0 means no key pressed
-
-    ; --- Check Special Keys ---
-    mov A, R7
-    cjne A, #14, Check_Hash ; 14 is Star (*)
-    
-    ; Star Key Pressed: Reset Buffer
-    lcall Reset_Current_Buffer
-    setb fullscreen_update_signal
-    mov Cursor_Idx, #0
-    ret
-
-Check_Hash:
-    mov A, R7
-    cjne A, #12, Check_Numeric ; 12 is Hash (#)
-    ret                     ; Ignore Hash key
-
-Check_Numeric:
-    ; Ensure key is 0-9
-    mov A, R7
-    clr C
-    subb A, #10
-    jnc Symbol_Key_Ignored
-    
-    ; Convert to ASCII
-    mov A, R7
-    add A, #0x30
-    mov R5, A
-
-    ; Save to Buffer
-    lcall Get_Current_Buffer_Addr
-    mov A, Cursor_Idx
-    add A, R0
-    mov R0, A
-    mov A, R5
-    mov @R0, A
-    inc Cursor_Idx
-
-    ; --- Check Cursor Limits ---
-    mov A, Current_State
-    cjne A, #1, Check_Limit_Time_1
-    sjmp Limit_Temp_3
-
-Check_Limit_Time_1:
-    cjne A, #3, Limit_Time_4
-    sjmp Limit_Temp_3
-
-Limit_Temp_3:
-    mov A, Cursor_Idx
-    cjne A, #3, Do_Refresh
-    dec Cursor_Idx          ; Stay at last digit
-    sjmp Do_Refresh
-
-Limit_Time_4:
-    mov A, Cursor_Idx
-    cjne A, #4, Do_Refresh
-    dec Cursor_Idx          ; Stay at last digit
-    sjmp Do_Refresh
-
-Do_Refresh:
-    setb fullscreen_update_signal
-    ret
-
-Symbol_Key_Ignored:
-    ret
-Keypad_Exit:
-    ret
-
+; State 0: Idle - wait for any key press
+; State 1: Debounce delay (50ms)
+; State 2: Verify key still pressed & identify key
+; State 3: Wait for key release
 ; ----------------------------------------------------------------
-; MODULE: HARDWARE SCANNER (Matrix Logic)
-; ----------------------------------------------------------------
-Keypad_Scan:
-    ; Step 1: Check if ANY key is pressed (All Rows Low)
+
+Keypad_FSM:
+    mov a, KP_DEB_state
+
+; ============================================================
+; State 0: Check if ANY key is pressed
+; ============================================================
+KP_State0:
+    cjne a, #0, KP_State1
+    
+    ; Set all rows low to detect any keypress
+    clr ROW1
+    clr ROW2
+    clr ROW3
+    clr ROW4
+    
+    ; Check if any column is low (key pressed)
+    mov C, COL1
+    anl C, COL2
+    anl C, COL3
+    anl C, COL4
+    jnc KP_State0_Pressed
+    
+    ; No key pressed, stay in state 0
+    setb ROW1
+    setb ROW2
+    setb ROW3
+    setb ROW4
+    ret
+
+KP_State0_Pressed:
+    ; Key detected, start debounce
+    mov KP_DEB_timer, #0
+    inc KP_DEB_state
+    ret
+
+; ============================================================
+; State 1: Debounce delay (wait 50ms)
+; ============================================================
+KP_State1:
+    cjne a, #1, KP_State2
+    mov a, KP_DEB_timer
+    cjne a, #50, KP_FSM_Done      ; Wait 50ms
+    inc KP_DEB_state
+    ret
+
+; ============================================================
+; State 2: Verify key still pressed & identify which key
+; ============================================================
+KP_State2:
+    cjne a, #2, KP_State3
+    
+    ; Check if any key still pressed
     clr ROW1
     clr ROW2
     clr ROW3
@@ -1884,129 +2035,148 @@ Keypad_Scan:
     anl C, COL2
     anl C, COL3
     anl C, COL4
-    jnc Keypad_Debounce
-    clr C
-    ret
-
-Keypad_Debounce:
-    lcall Wait_25ms_BLOCKING
-    mov C, COL1
-    anl C, COL2
-    anl C, COL3
-    anl C, COL4
-    jnc Keypad_Find_Row
-    clr C
-    ret
-
-Keypad_Find_Row:
+    jnc KP_State2_StillPressed
+    
+    ; Key released too early (noise), reset
     setb ROW1
     setb ROW2
     setb ROW3
     setb ROW4
+    mov KP_DEB_state, #0
+    ret
 
-    ; Row 1
+KP_State2_StillPressed:
+    ; Identify which key is pressed
+    setb ROW1
+    setb ROW2
+    setb ROW3
+    setb ROW4
+    
+    ; Scan Row 1
     clr ROW1
-    jnb COL1, Keypad_Key_1
-    jnb COL2, Keypad_Key_2
-    jnb COL3, Keypad_Key_3
-    jnb COL4, Keypad_Key_A
+    jnb COL1, KP_Found_1
+    jnb COL2, KP_Found_2
+    jnb COL3, KP_Found_3
+    jnb COL4, KP_Found_A
     setb ROW1
 
-    ; Row 2
+    ; Scan Row 2
     clr ROW2
-    jnb COL1, Keypad_Key_4
-    jnb COL2, Keypad_Key_5
-    jnb COL3, Keypad_Key_6
-    jnb COL4, Keypad_Key_B
+    jnb COL1, KP_Found_4
+    jnb COL2, KP_Found_5
+    jnb COL3, KP_Found_6
+    jnb COL4, KP_Found_B
     setb ROW2
 
-    ; Row 3
+    ; Scan Row 3
     clr ROW3
-    jnb COL1, Keypad_Key_7
-    jnb COL2, Keypad_Key_8
-    jnb COL3, Keypad_Key_9
-    jnb COL4, Keypad_Key_C
+    jnb COL1, KP_Found_7
+    jnb COL2, KP_Found_8
+    jnb COL3, KP_Found_9
+    jnb COL4, KP_Found_C
     setb ROW3
 
-    ; Row 4
+    ; Scan Row 4
     clr ROW4
-    jnb COL1, Keypad_Key_Star
-    jnb COL2, Keypad_Key_0
-    jnb COL3, Keypad_Key_Hash
-    jnb COL4, Keypad_Key_D
+    jnb COL1, KP_Found_Star
+    jnb COL2, KP_Found_0
+    jnb COL3, KP_Found_Hash
+    jnb COL4, KP_Found_D
     setb ROW4
-    clr C
+    
+    ; No key found (shouldn't happen), reset
+    mov KP_DEB_state, #0
     ret
 
-; Key Mapping (Renamed to avoid conflicts)
-Keypad_Key_1: mov R7, #1
-       sjmp Wait_Release
-Keypad_Key_2: mov R7, #2
-       sjmp Wait_Release
-Keypad_Key_3: mov R7, #3
-       sjmp Wait_Release
-Keypad_Key_A: mov R7, #10
-       sjmp Wait_Release
-Keypad_Key_4: mov R7, #4
-       sjmp Wait_Release
-Keypad_Key_5: mov R7, #5
-       sjmp Wait_Release
-Keypad_Key_6: mov R7, #6
-       sjmp Wait_Release
-Keypad_Key_B: mov R7, #11
-       sjmp Wait_Release
-Keypad_Key_7: mov R7, #7
-       sjmp Wait_Release
-Keypad_Key_8: mov R7, #8
-       sjmp Wait_Release
-Keypad_Key_9: mov R7, #9
-       sjmp Wait_Release
-Keypad_Key_C: mov R7, #13
-       sjmp Wait_Release
-Keypad_Key_Star: mov R7, #14
-       sjmp Wait_Release
-Keypad_Key_0: mov R7, #0
-       sjmp Wait_Release
-Keypad_Key_Hash: mov R7, #12
-       sjmp Wait_Release
-Keypad_Key_D: mov R7, #15
-       sjmp Wait_Release
+; Key value assignments
+KP_Found_1:
+    mov KP_key_value, #1
+    sjmp KP_Key_Identified
+KP_Found_2:
+    mov KP_key_value, #2
+    sjmp KP_Key_Identified
+KP_Found_3:
+    mov KP_key_value, #3
+    sjmp KP_Key_Identified
+KP_Found_A:
+    mov KP_key_value, #10
+    sjmp KP_Key_Identified
+KP_Found_4:
+    mov KP_key_value, #4
+    sjmp KP_Key_Identified
+KP_Found_5:
+    mov KP_key_value, #5
+    sjmp KP_Key_Identified
+KP_Found_6:
+    mov KP_key_value, #6
+    sjmp KP_Key_Identified
+KP_Found_B:
+    mov KP_key_value, #11
+    sjmp KP_Key_Identified
+KP_Found_7:
+    mov KP_key_value, #7
+    sjmp KP_Key_Identified
+KP_Found_8:
+    mov KP_key_value, #8
+    sjmp KP_Key_Identified
+KP_Found_9:
+    mov KP_key_value, #9
+    sjmp KP_Key_Identified
+KP_Found_C:
+    mov KP_key_value, #13
+    sjmp KP_Key_Identified
+KP_Found_Star:
+    mov KP_key_value, #14
+    sjmp KP_Key_Identified
+KP_Found_0:
+    mov KP_key_value, #0
+    sjmp KP_Key_Identified
+KP_Found_Hash:
+    mov KP_key_value, #12
+    sjmp KP_Key_Identified
+KP_Found_D:
+    mov KP_key_value, #15
+    ; Fall through
 
-Wait_Release:
+KP_Key_Identified:
+    ; Reset all rows high
+    setb ROW1
+    setb ROW2
+    setb ROW3
+    setb ROW4
+    inc KP_DEB_state            ; Move to state 3 (wait release)
+    ret
+
+; ============================================================
+; State 3: Wait for key release
+; ============================================================
+KP_State3:
+    cjne a, #3, KP_FSM_Done
+    
+    ; Set all rows low to check if any key still pressed
+    clr ROW1
+    clr ROW2
+    clr ROW3
+    clr ROW4
+    
     mov C, COL1
     anl C, COL2
     anl C, COL3
     anl C, COL4
-    jnc Wait_Release
-    setb C
+    
+    ; Reset rows
     setb ROW1
     setb ROW2
     setb ROW3
     setb ROW4
-    ret
-
-Wait_25ms:
-    ; 1. Check if we are already waiting
-    jb wait25_active, Check_Timer_Status
     
-    ; 2. Check if we just finished
-    jnb wait25_done, Start_New_Timer
+    jnc KP_FSM_Done             ; Key still pressed, keep waiting
     
-    ; 3. Timer is DONE! Reset flags and return True
-    clr wait25_done
-    setb C          ; Carry = 1 means "Done"
-    ret
+    ; Key released! Set flag and reset state
+    setb KP_key_flag
+    mov KP_DEB_state, #0
 
-Start_New_Timer:
-    ; 4. Start a new 25ms wait
-    mov wait25_count, #0
-    setb wait25_active
-    clr C           ; Carry = 0 means "Not Done Yet"
-    ret
-
-Check_Timer_Status:
-    ; 5. Still waiting... return False immediately
-    clr C           ; Carry = 0 means "Not Done Yet"
+KP_FSM_Done:
     ret
 
 ; ----------------------------------------------------------------
@@ -2492,7 +2662,6 @@ saturated_soak:
 	mov power_output+3, #0
 	ljmp power_control_done
 
-
 state4_power_control:
 	; ramp to reflow, max power
 	cjne a, #4, state5_power_control
@@ -2609,6 +2778,8 @@ Reset_Delay_Inner:
 	mov	PB2_DEB_state, #0
 	mov	PB0_DEB_timer, #0
 	mov	PB2_DEB_timer, #0
+    mov BTN_DEB_state, #0
+    mov BTN_DEB_timer, #0
     ; [FIX] ADD THIS BLOCK TO STOP STARTUP BEEP
     mov beep_state, #0
     mov beep_count, #0
@@ -2616,6 +2787,7 @@ Reset_Delay_Inner:
     mov beep_tmr+1, #0
     clr one_ms_beep_flag
     clr TR0 ; Force buzzer hardware OFF
+
 
 	; Clear all the flags
 	clr SOUND_OUT
@@ -2649,32 +2821,35 @@ Reset_Delay_Inner:
     lcall Init_All_Buffers
     lcall Initialize_Serial_Port
 ;-------------------------------------------------------------------------------;
-; while(1) loop
+; Cooperative Multithreading while(1) loop
 ;-------------------------------------------------------------------------------;
 loop:
-
+    ; One second signal generator
 	lcall SEC_FSM
 
-	; Check the FSM for the overall control flow of the reflow process
+	; Check the FSM for the overall control flow of the Controller
     lcall Control_FSM
 
-    ; Check the FSM for PB01 debounce
+    ; The FSM for Buttons and Keypad debounce
     lcall PB0_DEB
 	lcall PB2_DEB
+	lcall Check_Buttons 
+    lcall Check_Keypad
     
-    ; Added to take temp readings
+    ; Read temperature from Detector
     lcall Read_Thermocouple
     
-    ; 1. Check if we reached temp (Observer)
-    lcall Temp_Compare
-    
-    ; 2. Decide heater power based on flags (Driver)
-    ;lcall Power_Control
-    lcall proportional_power_control
-    
+    ; Check the Abort Condition
     lcall Safety_Check_TC
 
-	lcall Time_Counter
+    ; Counting the process time
+    lcall Time_Counter
+
+    ; Compare solder process running time with the targe timeline
+    lcall Time_Compare_MMSS
+
+    ; Check if we reached temp
+    lcall Temp_Compare
 
 	; Update Variables (times and temp)
 	lcall Update_FSM_Variables
@@ -2682,26 +2857,26 @@ loop:
 	; Update while at state 1
 	; LCD
 	lcall Update_Screen_Full 
-	; Buttons
-	lcall Check_Buttons 
-	; PB0pad
-    lcall Check_Keypad
 
     ; Update the LCD display based on the current state
     lcall LCD_Display_Update_func
 
-	lcall Time_Compare_MMSS
+    ; Power generator controller
+    ;lcall Power_Control
+    lcall proportional_power_control
 
-    ; Update the pwm output for the ssr
+    ; PWM wave generator
     lcall PWM_Wave 
-	; Update the Buzzer 
+
+    ; Beeper Controller
+    lcall Beep_Judge
+
+	; Update ongoing beeper 
 	lcall Beep_Task
+
     ; Update the pwm output for the servo
     lcall call_servo_control
 
-    lcall Beep_Judge
-
-    ; After initialization the program stays in this 'forever' loop
     ljmp loop
-;-------------------------------------------------------------------------------;
+;---------------------------------------- THE END ---------------------------------------;
 END
