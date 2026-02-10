@@ -87,10 +87,6 @@ PB0_DEB_state:  ds 1
 PB2_DEB_timer:  ds 1
 PB2_DEB_state:  ds 1
 
-iseg at 0x80
-; These hold the TEXT (ASCII) safely
-; Digits Only + Null Terminator, got rid of C,:, and s 
-
 ; Buzzer state
 beep_count:  ds 1      ; remaining beeps
 beep_state:  ds 1      ; 0=idle, 1=ON, 2=OFF
@@ -129,6 +125,7 @@ config_finish_signal: dbit 1
 state_change_signal: dbit 1
 state_change_signal_TC: dbit 1
 state_change_signal_Count: dbit 1
+state_change_beep_signal: dbit 1
 
 tc_missing_abort: dbit 1   ; 1 = abort because temp < 50C after 60s
 tc_startup_window: dbit 1   ; 1 = still within first 60 seconds of the run
@@ -139,6 +136,7 @@ PB2_flag: dbit 1 ; pause process
 
 ;buzzer beep
 one_ms_beep_flag: dbit 1
+beep_error_done: dbit 1
 
 ; BSEG (Bit Segment)
 wait25_active: dbit 1 ; 1 = We are currently waiting
@@ -156,6 +154,7 @@ fullscreen_update_signal: dbit 1
 
 one_second_flag_test: dbit 1
 one_millisecond_flag_servo: dbit 1 ; set the one millsiecond flag for servo pwm signal generation
+
 servo_angle_zero: dbit 1 ; flag for indicating whether the servo angle should be at 0 or not: 1 -> 0; 0 -> 180
 soak_temp_greater: dbit 1 ; target soak_temp greater than current_temp
 ; 11 bits used
@@ -279,7 +278,7 @@ Timer0_ISR:
     ;clr TF0  ; According to the data sheet this is done for us already.
     mov TH0, #high(TIMER0_RELOAD) ; Timer 0 doesn't have autoreload in the CV-8052
     mov TL0, #low(TIMER0_RELOAD)
-    ;cpl SOUND_OUT ; Connect speaker to P1.5
+    cpl SOUND_OUT ; Connect speaker to P1.5
     reti
 ; -----------------------------------------------------------------------------------------------;
 
@@ -565,6 +564,7 @@ LCD_Done_Bridge:
 ; ==========================================
 Check_Live_Update:
     jnb one_second_flag, LCD_Done_Bridge
+    clr one_second_flag
     
     ; Only update temp for States 2, 3, 4, 5, 6
     mov a, Control_FSM_state
@@ -641,24 +641,6 @@ LCD_Done:
     pop acc
     ret
 
-; ==========================================
-; PART 3: DYNAMIC VALUES (Time)
-; Runs every time 'one_second_flag' is set
-; ==========================================
-LCD_Display_Update_Time:
-	jnb time_count_doing_signal, LCD_Display_Update_Time_done
-	jbc one_second_lcd_flag, LCD_Display_Update_Time_do
-	sjmp LCD_Display_Update_Time_done
-
-LCD_Display_Update_Time_do:
-	Set_Cursor(2, 14)
-	Display_BCD(current_time_sec)
-	Set_Cursor(2, 11)
-	Display_BCD(current_time_minute)
-
-LCD_Display_Update_Time_done:
-	ret
-
 ; ----------------------------------------------------------------
 ; MODULE: SCREEN UPDATE (Visual Logic)
 ; ----------------------------------------------------------------
@@ -672,6 +654,7 @@ Update_Screen_Full_do:
     jnb fullscreen_update_signal, Update_Screen_Full_ret
     clr fullscreen_update_signal
 
+    lcall Clear_Screen_Func
     Set_Cursor(1, 1)
     ; --- Draw Line 1 (Titles) ---
     mov A, Current_State
@@ -1069,22 +1052,35 @@ TC_Done:
 ;-------------------------------------------------------------------------------;
 ; Temp_Compare
 ; Checks if we have reached the user's target temperatures.
-; Sets 'soak_temp_reached' if current_temp >= soak_temp
-; Sets 'reflow_temp_reached' if current_temp >= reflow_temp
+; Only compares relevant temperature based on current Control_FSM_state:
+;   State 2: Sets 'soak_temp_reached' if current_temp >= soak_temp
+;   State 4: Sets 'reflow_temp_reached' if current_temp >= reflow_temp
+;   State 6: Sets 'cooling_temp_reached' if current_temp < 100°C
 ;-------------------------------------------------------------------------------;
 Temp_Compare:
-    ; Reset flags initially
-    clr soak_temp_reached
-    clr reflow_temp_reached
-	clr cooling_temp_reached
-
     push acc
     push psw
     push AR0
     push AR1
     push AR2
     
-    ; --- 1. CHECK SOAK TEMP ---
+    mov a, Control_FSM_state
+    
+    ; --- CHECK STATE 2: SOAK TEMP ---
+    cjne a, #2, Temp_Compare_Check_State4
+    sjmp Check_Soak_Threshold
+    
+Temp_Compare_Check_State4:
+    ; --- CHECK STATE 4: REFLOW TEMP ---
+    cjne a, #4, Temp_Compare_Check_State6
+    sjmp Check_Reflow_Threshold
+    
+Temp_Compare_Check_State6:
+    ; --- CHECK STATE 6: COOLING TEMP ---
+    cjne a, #6, Temp_Compare_Done
+    sjmp Check_Cooling_Threshold
+
+Check_Soak_Threshold:
     ; Copy current_temp to X
     mov R0, #current_temp
     mov R1, #x
@@ -1097,14 +1093,14 @@ Temp_Compare:
 
     ; Compare: Is X (Current) < Y (Target)?
     lcall x_lt_y
-    jb mf, Check_Reflow_Threshold ; If Current < Target, jump (Flag stays 0)
+    jb mf, Temp_Compare_Done          ; If Current < Target, not reached yet
     
-    ; If we are here, Current >= Target
+    ; If Current >= Target
     setb soak_temp_reached
+    sjmp Temp_Compare_Done
 
 Check_Reflow_Threshold:
-    ; --- 2. CHECK REFLOW TEMP ---
-    ; Copy current_temp to X (Need to reload X because math32 destroys it)
+    ; Copy current_temp to X
     mov R0, #current_temp
     mov R1, #x
     lcall Copy4_Bytes_R0_to_R1
@@ -1116,13 +1112,14 @@ Check_Reflow_Threshold:
 
     ; Compare
     lcall x_lt_y
-    jb mf, Temp_Compare_Done
+    jb mf, Temp_Compare_Done          ; If Current < Target, not reached yet
     
     ; If Current >= Target
     setb reflow_temp_reached
+    sjmp Temp_Compare_Done
 
 Check_Cooling_Threshold:
-    ; --- 3. CHECK COOLING TEMP (< 100°C) ---
+    ; Copy current_temp to X
     mov R0, #current_temp
     mov R1, #x
     lcall Copy4_Bytes_R0_to_R1
@@ -1134,6 +1131,7 @@ Check_Cooling_Threshold:
     ; If Current < 100°C
     setb cooling_temp_reached
 
+; ---------------------------------------------------------
 Temp_Compare_Done:
     pop AR2
     pop AR1
@@ -1255,37 +1253,49 @@ end_pwm_generator:
 ;
 ;   the Load_Y constants accordingly.
 ;-------------------------------------------------------------------------------;
+;-------------------------------------------------------------------------------;
+; Abort condition safety check Temperature time
+;
+; PURPOSE:
+;   Automatic cycle termination on error:
+;   Abort if oven fails to reach at least 50C in first 60s (1 minute).
+;
+; TRIP CONDITION:
+;   if (current_time_minute >= 1) AND (current_temp < 50C)
+;       -> set tc_missing_abort
+;       -> set stop_signal
+;
+; ASSUMPTIONS:
+;   - current_time_sec (byte): seconds 0-59
+;   - current_time_minute (byte): minutes counter
+;   - current_temp is in DEGREES C (integer, 32-bit, little-endian)
+;-------------------------------------------------------------------------------;
 Safety_Check_TC:
     push acc
     push psw
     push AR0
     push AR1
-    push AR2
 
     ; ---------------------------------------------------------
-    ; [FIX] GATEKEEPER: IGNORE UNLESS IN STATE 2 (RAMP TO SOAK)
+    ; GATEKEEPER: IGNORE UNLESS IN STATE 2 (RAMP TO SOAK)
     ; ---------------------------------------------------------
     mov a, Control_FSM_state
     cjne a, #2, Safety_TC_Exit_Bridge ; If State != 2, skip everything
     sjmp Safety_Logic_Proceed         ; If State == 2, do the check
 
-    Safety_TC_Exit_Bridge:
-        ljmp Safety_TC_Done               ; Jump to the end
+Safety_TC_Exit_Bridge:
+    ljmp Safety_TC_Done               ; Jump to the end
 
-    Safety_Logic_Proceed:
-        ; If already aborted or startup window closed, do nothing
-        jb   tc_missing_abort, Safety_TC_Done
-        jnb  tc_startup_window, Safety_TC_Done
+Safety_Logic_Proceed:
+    ; If already aborted or startup window closed, do nothing
+    jb   tc_missing_abort, Safety_TC_Done
+    jnb  tc_startup_window, Safety_TC_Done
 
-    ; Check: elapsed >= 60 seconds ?
+    ; Check: current_time_minute >= 1 ? (has 1 minute passed?)
     mov  a, current_time_minute
-    jnz  Safety_TC_At60          ; if minute >= 1, definitely >=60s
+    jz   Safety_TC_Done               ; minute == 0, still waiting
 
-    Load_Y(60)
-    lcall x_lt_y
-    jb   mf, Safety_TC_Exit_Bridge        ; still < 60s → keep waiting
-
-    ; We reached 60s: close the startup window so it won't re-check later
+    ; We reached 1 minute: close the startup window so it won't re-check later
     clr  tc_startup_window
 
     ; Now check: current_temp < 50 ?
@@ -1295,24 +1305,24 @@ Safety_Check_TC:
 
     Load_Y(50)
     lcall x_lt_y
-    jnb  mf, Safety_TC_Exit_Bridge        ; temp >= 50 → pass
+    jnb  mf, Safety_TC_Done           ; temp >= 50 → pass
 
-    ; FAIL: at 60s, still below 50C → abort
+    ; FAIL: at 1 minute, still below 50C → abort
     clr  PWM_OUT
     setb tc_missing_abort
     setb stop_signal
-	lcall Beep_Ten
-    ; 3. Force FSM to State 0 (Welcome)
+    lcall Beep_Ten
+    
+    ; Force FSM to State 0 (Welcome)
     mov Control_FSM_state, #0
     
-    ; 4. Force UI to State 0 (Home Screen)
+    ; Force UI to State 0 (Home Screen)
     mov Current_State, #0
     
-    ; 5. Trigger Screen Refresh
-    setb state_change_signal ; Tell loop to redraw "Welcome"
+    ; Trigger Screen Refresh
+    setb state_change_signal          ; Tell loop to redraw "Welcome"
 
 Safety_TC_Done:
-    pop  AR2
     pop  AR1
     pop  AR0
     pop  psw
@@ -1322,6 +1332,47 @@ Safety_TC_Done:
 ; ============================================================
 ; BUZZER STARTUP FUNCTIONS
 ; ============================================================
+;============================================================
+; Beep_Judge
+; Purpose: Trigger appropriate beep pattern based on events
+;   - Beep once when state changes
+;   - Beep five times when entering state 6 (cooling/finished)
+;   - Beep ten times if tc_missing_abort = 1 (error)
+;
+; Call this in main loop after Control_FSM
+;============================================================
+Beep_Judge:
+    push acc
+    push psw
+
+    ; --- Priority 1: Error condition (highest priority) ---
+    jnb tc_missing_abort, Beep_Judge_Check_State6
+    ; Error detected - beep 10 times (only once per error)
+    jb beep_error_done, Beep_Judge_Done   ; Already beeped for this error?
+    setb beep_error_done                   ; Mark as handled
+    lcall Beep_Ten
+    sjmp Beep_Judge_Done
+
+Beep_Judge_Check_State6:
+    ; --- Priority 2: Entering State 6 (finished) ---
+    jnb state_change_beep_signal, Beep_Judge_Done  ; No state change? Exit
+    
+    mov a, Control_FSM_state
+    cjne a, #6, Beep_Judge_Normal_Change
+    ; Entering state 6 - beep 5 times
+    clr state_change_beep_signal               ; Consume the signal
+    lcall Beep_Five
+    sjmp Beep_Judge_Done
+
+Beep_Judge_Normal_Change:
+    ; --- Priority 3: Normal state change - beep once ---
+    clr state_change_beep_signal               ; Consume the signal
+    lcall Beep_Once
+
+Beep_Judge_Done:
+    pop psw
+    pop acc
+    ret
 
 Beep_Once:
     mov beep_count, #1
@@ -1353,7 +1404,6 @@ Beep_Start:
 ; Beep five times if finished
 ; Beep ten times if meets error
 ;============================================================
-
 Beep_Task:
     jnb one_ms_beep_flag, Beep_Done
     clr one_ms_beep_flag
@@ -1421,6 +1471,7 @@ Control_FSM_state0_a:
 	ret
 Control_FSM_state0:
     cjne a, #0, Control_FSM_state1
+    clr beep_error_done
     jnb PB0_flag, Control_FSM_state0_ret  ; Check flag
     clr PB0_flag                 
     sjmp Control_FSM_state1_a
@@ -1432,6 +1483,7 @@ Control_FSM_state1_a:
     mov Current_State, #0
     setb state_change_signal
 	setb state_change_signal_TC
+    setb state_change_beep_signal
 	ret
 Control_FSM_state1:
     cjne a, #1, Control_FSM_state2
@@ -1447,6 +1499,7 @@ Control_FSM_state2_a:
 	setb state_change_signal
 	setb state_change_signal_TC
 	setb state_change_signal_Count
+    setb state_change_beep_signal
 	ret
 Control_FSM_state2:
     cjne a, #2, Control_FSM_state3
@@ -1455,7 +1508,6 @@ Control_FSM_state2:
     ljmp Control_FSM_state6_a ; Pause
 
 State2_Check:
-	lcall Temp_Compare
     jnb soak_temp_reached, State2_Ret
     
     ; --- We reached Temp! Move to State 3 ---
@@ -1470,6 +1522,7 @@ Control_FSM_state3_a:
 	mov Control_FSM_state, #3
 	setb state_change_signal
 	setb state_change_signal_TC
+    setb state_change_beep_signal
 	ret
 Control_FSM_state3:
     cjne a, #3, Control_FSM_state4
@@ -1488,6 +1541,7 @@ Control_FSM_state4_a:
 	mov Control_FSM_state, #4
 	setb state_change_signal
 	setb state_change_signal_TC
+    setb state_change_beep_signal
 	ret
 Control_FSM_state4:
     cjne a, #4, Control_FSM_state5
@@ -1495,7 +1549,6 @@ Control_FSM_state4:
     clr PB2_flag
     ljmp Control_FSM_state6_a
 State4_Check:
-	lcall Temp_Compare
     jnb reflow_temp_reached, State4_Ret
     clr reflow_temp_reached
     clr reflow_time_reached
@@ -1508,6 +1561,7 @@ Control_FSM_state5_a:
 	mov Control_FSM_state, #5
 	setb state_change_signal
 	setb state_change_signal_TC
+    setb state_change_beep_signal
 	ret
 Control_FSM_state5:
     cjne a, #5, Control_FSM_state6
@@ -1527,11 +1581,11 @@ Control_FSM_state6_a:
 	setb state_change_signal
 	setb state_change_signal_TC
 	setb state_change_signal_Count
+    setb state_change_beep_signal
 	ret
 Control_FSM_state6:
     cjne a, #6, Control_FSM_state7
     ; Wait for Cooling Temp Reached
-	lcall Temp_Compare
     jnb cooling_temp_reached, State6_Ret
     clr cooling_temp_reached
     sjmp Control_FSM_state7_a
@@ -1543,6 +1597,7 @@ Control_FSM_state7_a:
 	mov Control_FSM_state, #7
 	setb state_change_signal
 	setb state_change_signal_TC
+    setb state_change_beep_signal
 	ret
 Control_FSM_state7:
     cjne a, #7, Control_FSM_done
@@ -2475,8 +2530,6 @@ state_7_power_control:
 power_control_done:
 	ret
 
-END
-
 ;-------------------------------------------------------------------------------;
 ;         Main program.          
 ;-------------------------------------------------------------------------------;
@@ -2489,7 +2542,7 @@ main:
     mov SP, #0xC0       ; Reset Stack Pointer to safe location
     
     ; --------------------------------------------------------
-    ; 2. THE "DIRTY DELAY" (Fixes Reset Garbage)
+    ; THE "DIRTY DELAY" (Fixes Reset Garbage)
     ; We burn ~100ms here using a raw loop. 
     ; We cannot use timers yet because they aren't initialized.
     ; --------------------------------------------------------
@@ -2499,13 +2552,9 @@ Reset_Delay_Outer:
 Reset_Delay_Inner:
     djnz R1, Reset_Delay_Inner
     djnz R0, Reset_Delay_Outer
-    ; --------------------------------------------------------
-
-    ; ... NOW continue with your normal Port Configuration ...
     
     ; --- PORT CONFIGURATION ---
     mov P0MOD, #0xAA
-
     ; P1: Mixed usage 
     ; P1.7(LCD_RS), P1.6(Row3), P1.5(Sound), P1.4(Row2)
     ; P1.3(PWM), P1.2(Row1), P1.1(LCD_E) -> All Outputs
@@ -2570,6 +2619,7 @@ Reset_Delay_Inner:
 
 	; Clear all the flags
 	clr SOUND_OUT
+    clr beep_error_done
 	clr tc_missing_abort
 	clr stop_signal
 	clr PB0_flag
@@ -2578,17 +2628,16 @@ Reset_Delay_Inner:
 	clr one_second_flag
 	clr one_second_lcd_flag
 	clr config_finish_signal
+    clr time_count_doing_signal
+    clr fullscreen_update_signal
 	clr soak_temp_reached
 	clr soak_time_reached
 	clr reflow_temp_reached
 	clr reflow_time_reached
 	clr cooling_temp_reached
-	clr state_change_signal_TC
+    clr state_change_signal_TC
 	clr state_change_signal_Count
-	clr time_count_doing_signal
-
-	clr one_second_flag_test
-	
+    clr state_change_beep_signal
     ; Set bit
 	setb state_change_signal
     setb tc_startup_window
@@ -2598,21 +2647,13 @@ Reset_Delay_Inner:
     lcall ELCD_4BIT
     ;----- Two new lines I added to initialize the UI
     lcall Init_All_Buffers
-    ;-----
     lcall Initialize_Serial_Port
 ;-------------------------------------------------------------------------------;
 ; while(1) loop
 ;-------------------------------------------------------------------------------;
 loop:
-    ; Full reset button on P3.7 (active-low to GND)
-    jnb P3_7, Full_Reset_Trig
-    sjmp Full_Reset_Check_Done
-Full_Reset_Trig:
-    ljmp Full_Reset
 
-Full_Reset_Check_Done:
 	lcall SEC_FSM
-	;lcall FSM_test
 
 	; Check the FSM for the overall control flow of the reflow process
     lcall Control_FSM
@@ -2649,22 +2690,16 @@ Full_Reset_Check_Done:
     ; Update the LCD display based on the current state
     lcall LCD_Display_Update_func
 
-	lcall LCD_Display_Update_Time
-
 	lcall Time_Compare_MMSS
 
-    ; Update the pwm output for the ssr
-    lcall PWM_Wave 
-
-    jnb one_ms_pwm_flag, Skip_Beep_Sync
-    setb one_ms_beep_flag  ; Give the buzzer its own copy of the time tick
-Skip_Beep_Sync:
     ; Update the pwm output for the ssr
     lcall PWM_Wave 
 	; Update the Buzzer 
 	lcall Beep_Task
     ; Update the pwm output for the servo
     lcall call_servo_control
+
+    lcall Beep_Judge
 
     ; After initialization the program stays in this 'forever' loop
     ljmp loop

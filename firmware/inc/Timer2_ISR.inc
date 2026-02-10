@@ -33,6 +33,7 @@ Timer2_ISR:
     inc SEC_FSM_timer
     setb one_ms_pwm_flag 
 	setb one_ms_buzz_flag
+    setb one_ms_beep_flag
 
     inc PB0_DEB_timer
     inc PB2_DEB_timer
