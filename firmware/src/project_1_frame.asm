@@ -1672,15 +1672,6 @@ Beep_Judge:
     push acc
     push psw
 
-<<<<<<< Updated upstream
-=======
-    jnb tc_missing_abort, Beep_Judge_Check_State6
-    jb beep_error_done, Beep_Judge_Done   
-    setb beep_error_done              
-    lcall Beep_Ten
-    sjmp Beep_Judge_Done
-
->>>>>>> Stashed changes
 Beep_Judge_Check_State6:
     jnb state_change_beep_signal, Beep_Judge_Done  ; No state change? Exit
     
@@ -1794,7 +1785,6 @@ Control_FSM_state0_a:
 	ret
 Control_FSM_state0:
     cjne a, #0, Control_FSM_state1
-    clr beep_error_done
     jnb PB0_flag, Control_FSM_state0_ret  ; Check flag
     clr PB0_flag                 
     sjmp Control_FSM_state1_a
