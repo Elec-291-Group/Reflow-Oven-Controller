@@ -3,7 +3,7 @@
 0000              3   ;-------------------------------------------------------------------------------
 0000              4   ; Reset vector
 0000              5   org 0x0000
-0000 021687       6       ljmp main
+0000 0216E0       6       ljmp main
 0003              7   ; External interrupt 0 vector
 0003              8   org 0x0003
 0003 32           9       reti
@@ -3340,7 +3340,7 @@
 1395           2768   
 1395           2769   power_leds_mid:
 1395 D2B4      2770       setb LED_LEFT
-1397 D2B3      2771       setb LED_MID
+1397 C2B3      2771       clr LED_MID
 1399 C2B2      2772       clr  LED_RIGHT
 139B 22        2773       ret
 139C           2774   
@@ -3356,708 +3356,746 @@
 13A5           2784   state0_power_control:
 13A5           2785            ; idle
 13A5           2786            ; 0% power
-13A5 B4000F    2787            cjne a, #0, state1_power_control
+13A5 B40012    2787            cjne a, #0, state1_power_control
 13A8 755800    2788            mov power_output, #low(NO_POWER)
 13AB 755900    2789            mov power_output+1, #low(NO_POWER)
 13AE 755A00    2790            mov power_output+2, #0
 13B1 755B00    2791            mov power_output+3, #0
-13B4 02154F    2792            ljmp power_control_done
-13B7           2793   
-13B7           2794   state1_power_control:
-13B7           2795            ; idle
-13B7           2796            ; 0% power
-13B7 B4010F    2797            cjne a, #1, state2_power_control
-13BA 755800    2798            mov power_output, #low(NO_POWER)
-13BD 755900    2799            mov power_output+1, #low(NO_POWER)
-13C0 755A00    2800            mov power_output+2, #0
-13C3 755B00    2801            mov power_output+3, #0
-13C6 02154F    2802            ljmp power_control_done
-13C9           2803            
-13C9           2804   state2_power_control:
-13C9           2805            ; ramp to soak, ramp to ~150C
-13C9           2806            ; 100% power
-13C9 B4020F    2807            cjne a, #2, state3_power_control
-13CC 7558DC    2808            mov power_output, #low(MAX_POWER)
-13CF 755905    2809            mov power_output+1, #high(MAX_POWER)
-13D2 755A00    2810            mov power_output+2, #0
-13D5 755B00    2811            mov power_output+3, #0
-13D8 02154F    2812            ljmp power_control_done
-13DB           2813   
-13DB           2814   state3_power_control:
-13DB           2815            ; soak period, hold at 150C
-13DB           2816            ; 20% base power + proportional calculated power
-13DB B40302    2817            cjne a, #3, jump_state4_power_control
-13DE 8003      2818            sjmp state3_power_control_calculation
-13E0           2819   
-13E0           2820   jump_state4_power_control:
-13E0 02150D    2821            ljmp state4_power_control
-13E3           2822   
-13E3           2823   state3_power_control_calculation:
-13E3           2824            ; move soak_temp to x
-13E3 854B3A    2825            mov x, soak_temp
-13E6 854C3B    2826            mov x+1, soak_temp+1
-13E9 854D3C    2827            mov x+2, soak_temp+2
-13EC 854E3D    2828            mov x+3, soak_temp+3
-13EF           2829            ; move current_temp to y
-13EF 85473E    2830            mov y, current_temp
-13F2 85483F    2831            mov y+1, current_temp+1
-13F5 854940    2832            mov y+2, current_temp+2
-13F8 854A41    2833            mov y+3, current_temp+3
-13FB           2834   
-13FB           2835            ; compare between soak_temp and current_temp
-13FB C200      2836            clr mf
-13FD 120178    2837            lcall x_gteq_y
-1400 10002B    2838            jbc mf, st_sub_ct
-1403           2839            ; current_temp - soak_temp if st < ct
-1403 C228      2840            clr soak_temp_greater
-1405           2841            ; move current_temp to y
-1405 854B3E    2842            mov y, soak_temp
-1408 854C3F    2843            mov y+1, soak_temp+1
-140B 854D40    2844            mov y+2, soak_temp+2
-140E 854E41    2845            mov y+3, soak_temp+3
-1411           2846            ; move current_temp to x
-1411 85473A    2847            mov x, current_temp
-1414 85483B    2848            mov x+1, current_temp+1
-1417 85493C    2849            mov x+2, current_temp+2
-141A 854A3D    2850            mov x+3, current_temp+3
-141D 1200F6    2851            lcall sub32
-1420 853A62    2852            mov soak_temp_diff, x
-1423 853B63    2853            mov soak_temp_diff+1, x+1
-1426 853C64    2854            mov soak_temp_diff+2, x+2
-1429 853D65    2855            mov soak_temp_diff+3, x+3
-142C 8011      2856            sjmp proportional_input_soak
-142E           2857   
-142E           2858   st_sub_ct:
-142E           2859            ; soak_temp - current_temp
-142E D228      2860            setb soak_temp_greater
-1430 1200F6    2861            lcall sub32
-1433 853A62    2862            mov soak_temp_diff, x
-1436 853B63    2863            mov soak_temp_diff+1, x+1
-1439 853C64    2864            mov soak_temp_diff+2, x+2
-143C 853D65    2865            mov soak_temp_diff+3, x+3
-143F           2866   
-143F           2867   proportional_input_soak:
-143F           2868            ; proportaional block calculation       
-143F           2869            ; move soak_temp_diff to x
-143F 85623A    2870            mov x, soak_temp_diff
-1442 85633B    2871            mov x+1, soak_temp_diff+1
-1445 85643C    2872            mov x+2, soak_temp_diff+2
-1448 85653D    2873            mov x+3, soak_temp_diff+3
-144B           2874            ; move proportional gain to y
-144B 753E05    2875            mov y+0, #low (KP % 0x10000) 
-144E 753F00    2875            mov y+1, #high(KP % 0x10000) 
-1451 754000    2875            mov y+2, #low (KP / 0x10000) 
-1454 754100    2875            mov y+3, #high(KP / 0x10000) 
-1457 12018C    2876            lcall mul32 ; proportional_output = proportional_gain * difference
-145A           2877            
-145A 853A66    2878            mov proportional_gain_var, x
-145D 853B67    2879            mov proportional_gain_var+1, x+1
-1460 853C68    2880            mov proportional_gain_var+2, x+2
-1463 853D69    2881            mov proportional_gain_var+3, x+3
-1466           2882   
-1466           2883            ; base_power + soak_power when soak_temp > current_temp
-1466 302829    2884            jnb soak_temp_greater, sub_proportional_soak
-1469 85663A    2885            mov x, proportional_gain_var
-146C 85673B    2886            mov x+1, proportional_gain_var+1
-146F 85683C    2887            mov x+2, proportional_gain_var+2
-1472 85693D    2888            mov x+3, proportional_gain_var+3
-1475 753E2C    2889            mov y+0, #low (BASE_POWER % 0x10000) 
-1478 753F01    2889            mov y+1, #high(BASE_POWER % 0x10000) 
-147B 754000    2889            mov y+2, #low (BASE_POWER / 0x10000) 
-147E 754100    2889            mov y+3, #high(BASE_POWER / 0x10000) 
-1481 1200D3    2890            lcall add32
-1484           2891            ; x now holds the power output before the saturator
-1484 853A66    2892            mov proportional_gain_var, x
-1487 853B67    2893            mov proportional_gain_var+1, x+1
-148A 853C68    2894            mov proportional_gain_var+2, x+2
-148D 853D69    2895            mov proportional_gain_var+3, x+3
-1490 803D      2896            sjmp saturator_soak
-1492           2897   
-1492           2898   sub_proportional_soak:
-1492           2899            ; base_power - soak_power when soak_temp <= current_temp
-1492 753A2C    2900            mov x+0, #low (BASE_POWER % 0x10000) 
-1495 753B01    2900            mov x+1, #high(BASE_POWER % 0x10000) 
-1498 753C00    2900            mov x+2, #low (BASE_POWER / 0x10000) 
-149B 753D00    2900            mov x+3, #high(BASE_POWER / 0x10000) 
-149E 85663E    2901            mov y, proportional_gain_var
-14A1 85673F    2902            mov y+1, proportional_gain_var+1
-14A4 856840    2903            mov y+2, proportional_gain_var+2
-14A7 856941    2904            mov y+3, proportional_gain_var+3
-14AA           2905   
-14AA           2906            ; compare whether base_power < proportional_gain_var
-14AA C200      2907            clr mf
-14AC 12011A    2908            lcall x_lt_y ; set mf to 1 if base_power < proportional_gain_var, clamp output to 0
-14AF 30000E    2909            jnb mf, bp_gteq_pgv
-14B2 756600    2910            mov proportional_gain_var, #low(NO_POWER)
-14B5 756700    2911            mov proportional_gain_var+1, #high(NO_POWER)
-14B8 756800    2912            mov proportional_gain_var+2, #0
-14BB 756900    2913            mov proportional_gain_var+3, #0
-14BE 800F      2914            sjmp saturator_soak
-14C0           2915   
-14C0           2916   bp_gteq_pgv:
-14C0           2917            ; calculate subtracted gain
-14C0 1200F6    2918            lcall sub32
-14C3           2919            ; x now holds the power output before the saturator
-14C3 853A66    2920            mov proportional_gain_var, x
-14C6 853B67    2921            mov proportional_gain_var+1, x+1
-14C9 853C68    2922            mov proportional_gain_var+2, x+2
-14CC 853D69    2923            mov proportional_gain_var+3, x+3
-14CF           2924   
-14CF           2925   saturator_soak:
-14CF           2926            ; proportional_gain_var now holds the power output before the saturator
-14CF           2927            ; saturate power output to max power
-14CF 85663A    2928            mov x, proportional_gain_var
-14D2 85673B    2929            mov x+1, proportional_gain_var+1
-14D5 85683C    2930            mov x+2, proportional_gain_var+2
-14D8 85693D    2931            mov x+3, proportional_gain_var+3
-14DB           2932   
-14DB 753EDC    2933            mov y+0, #low (MAX_POWER % 0x10000) 
-14DE 753F05    2933            mov y+1, #high(MAX_POWER % 0x10000) 
-14E1 754000    2933            mov y+2, #low (MAX_POWER / 0x10000) 
-14E4 754100    2933            mov y+3, #high(MAX_POWER / 0x10000) 
-14E7           2934   
-14E7 C200      2935            clr mf
-14E9 120136    2936            lcall x_gt_y ; set mf to 1 if calculated power output greater than max power
-14EC 20000F    2937            jb mf, saturated_soak
-14EF           2938            ; set power_output to calculated power if not saturated
-14EF 856658    2939            mov power_output, proportional_gain_var
-14F2 856759    2940            mov power_output+1, proportional_gain_var+1
-14F5 85685A    2941            mov power_output+2, proportional_gain_var+2
-14F8 85695B    2942            mov power_output+3, proportional_gain_var+3
-14FB 02154F    2943            ljmp power_control_done
-14FE           2944   
-14FE           2945   saturated_soak:
-14FE 7558DC    2946            mov power_output, #low(MAX_POWER)
-1501 755905    2947            mov power_output+1, #high(MAX_POWER)
-1504 755A00    2948            mov power_output+2, #0
-1507 755B00    2949            mov power_output+3, #0
-150A 02154F    2950            ljmp power_control_done
-150D           2951   
-150D           2952   
-150D           2953   state4_power_control:
-150D           2954            ; ramp to reflow, max power
-150D B4040F    2955            cjne a, #4, state5_power_control
-1510 7558DC    2956            mov power_output, #low(MAX_POWER)
-1513 755905    2957            mov power_output+1, #high(MAX_POWER)
-1516 755A00    2958            mov power_output+2, #0
-1519 755B00    2959            mov power_output+3, #0
-151C 02154F    2960            ljmp power_control_done
-151F           2961   
-151F           2962   state5_power_control:
-151F           2963            ; reflow 20% base power
-151F B4050F    2964            cjne a, #5, state6_power_control
-1522 75582C    2965            mov power_output, #low(BASE_POWER)  
-1525 755901    2966            mov power_output+1, #high(BASE_POWER)
-1528 755A00    2967            mov power_output+2, #0
-152B 755B00    2968            mov power_output+3, #0
-152E 02154F    2969            ljmp power_control_done
-1531           2970   
-1531           2971   state6_power_control:
-1531           2972            ; cooling 0% power
-1531 B4060F    2973            cjne a, #6, state_7_power_control
-1534 755800    2974            mov power_output, #low(NO_POWER)
-1537 755900    2975            mov power_output+1, #high(NO_POWER)
-153A 755A00    2976            mov power_output+2, #0
-153D 755B00    2977            mov power_output+3, #0
-1540 02154F    2978            ljmp power_control_done
-1543           2979   
-1543           2980   state_7_power_control:
-1543           2981            ; idle 0% power
-1543 755800    2982            mov power_output, #low(NO_POWER)
-1546 755900    2983            mov power_output+1, #high(NO_POWER)
-1549 755A00    2984            mov power_output+2, #0
-154C 755B00    2985            mov power_output+3, #0
-154F           2986   
-154F           2987   power_control_done:
-154F 22        2988            ret
-1550           2989   
-1550           2990   ;----------------------------------------------------------------------------------------
-1550           2991   ; function for playing the boot up music
-1550           2992   music:
-1550           2993            ; 1
-1550 1215A8    2994            lcall playC
-1553 121638    2995            lcall delayHalfSec
-1556           2996            ; 1
-1556 1215A8    2997            lcall playC
-1559 121638    2998            lcall delayHalfSec
-155C           2999            ; 5
-155C 1215C0    3000            lcall playG
-155F 121638    3001            lcall delayHalfSec
-1562           3002            ; 5
-1562 1215C0    3003            lcall playG
-1565 121638    3004            lcall delayHalfSec
-1568           3005            ; 6
-1568 1215D8    3006            lcall PlayA
-156B 121638    3007            lcall delayHalfSec
-156E           3008            ; 6
-156E 1215D8    3009            lcall PlayA
-1571 121638    3010            lcall delayHalfSec
-1574           3011            ; 5
-1574 1215C0    3012            lcall playG
-1577 121638    3013            lcall delayHalfSec
-157A           3014            ; 4
-157A 1215F0    3015            lcall playF
-157D 121638    3016            lcall delayHalfSec
-1580           3017   
-1580           3018            ; 4
-1580 1215F0    3019            lcall playF
-1583 121638    3020            lcall delayHalfSec
-1586           3021            ; 3
-1586 121608    3022            lcall playE
-1589 121638    3023            lcall delayHalfSec
-158C           3024   
-158C           3025            ; 3
-158C 121608    3026            lcall playE
-158F 121638    3027            lcall delayHalfSec
-1592           3028   
-1592           3029            ; 2
-1592 121620    3030            lcall playD
-1595 121638    3031            lcall delayHalfSec
-1598           3032   
-1598           3033            ; 2
-1598 121620    3034            lcall playD
-159B 121638    3035            lcall delayHalfSec
-159E           3036            ; 1
-159E 1215A8    3037            lcall playC
-15A1 121638    3038            lcall delayHalfSec
-15A4           3039            
-15A4 121638    3040            lcall delayHalfSec
-15A7 22        3041            ret
-15A8           3042   
-15A8           3043   ;------------------------------------
-15A8           3044   ; Play_C_0p5s
-15A8           3045   ; Plays ~523 Hz on P1.7 for 0.5 seconds
-15A8           3046   ;------------------------------------
-15A8           3047   playC:
-15A8 7F14      3048       MOV R7, #20        ; outer loop counter
-15AA           3049   
-15AA           3050   OUTER_LOOP:
-15AA 7E1A      3051       MOV R6, #26        ; inner loop counter
-15AC           3052   
-15AC           3053   INNER_LOOP:
-15AC B295      3054       CPL SOUND_OUT           ; toggle buzzer pin
-15AE 1215B8    3055       LCALL Delay_C      ; ~960 �s delay
-15B1 DEF9      3056       DJNZ R6, INNER_LOOP
-15B3           3057   
-15B3 DFF5      3058       DJNZ R7, OUTER_LOOP
-15B5           3059   
-15B5 C295      3060       CLR SOUND_OUT           ; stop sound (pin low)
-15B7 22        3061       RET
-15B8           3062       
-15B8           3063   Delay_C:
-15B8 7D18      3064       MOV R5, #24        ; 24 � 40 �s = 960 �s
-15BA           3065   DELAY_LOOP:
-15BA 12071D    3066       LCALL Wait40uSec
-15BD DDFB      3067       DJNZ R5, DELAY_LOOP
-15BF 22        3068       RET
-15C0           3069       
-15C0           3070   
-15C0           3071   ;------------------------------------
-15C0           3072   ; Play_G_0p5s
-15C0           3073   ; Plays ~784 Hz on P1.7 for 0.5 seconds
-15C0           3074   ;------------------------------------
-15C0           3075   playG:
-15C0 7F1F      3076       MOV R7, #31        ; outer loop
-15C2           3077   
-15C2           3078   OUTER_G:
-15C2 7E19      3079       MOV R6, #25        ; inner loop 31 � 25 = 775 toggles
-15C4           3080   
-15C4           3081   INNER_G:
-15C4 B295      3082       CPL SOUND_OUT           ; toggle buzzer pin
-15C6 1215D0    3083       LCALL Delay_G      ; ~640 �s delay
-15C9 DEF9      3084       DJNZ R6, INNER_G
-15CB           3085   
-15CB DFF5      3086       DJNZ R7, OUTER_G
-15CD           3087   
-15CD C295      3088       CLR SOUND_OUT           ; stop sound
-15CF 22        3089       RET
-15D0           3090       
-15D0           3091   Delay_G:
-15D0 7D10      3092       MOV R5, #16        ; 16 � 40 �s = 640 �s
-15D2           3093   DELAY_G_LOOP:
-15D2 12071D    3094       LCALL Wait40uSec
-15D5 DDFB      3095       DJNZ R5, DELAY_G_LOOP
-15D7 22        3096       RET
-15D8           3097            
-15D8           3098    
-15D8           3099    ;------------------------------------
-15D8           3100   ; Play_A_0p5s
-15D8           3101   ; Plays ~880 Hz on P1.7 for 0.5 seconds
-15D8           3102   ;------------------------------------
-15D8           3103   playA:
-15D8 7F22      3104       MOV R7, #34        ; outer loop counter
-15DA           3105   
-15DA           3106   OUTER_A:
-15DA 7E1A      3107       MOV R6, #26        ; inner loop ? 34 � 26 = 884 toggles
-15DC           3108   
-15DC           3109   INNER_A:
-15DC B295      3110       CPL SOUND_OUT           ; toggle buzzer pin
-15DE 1215E8    3111       LCALL Delay_A      ; ~560 �s delay
-15E1 DEF9      3112       DJNZ R6, INNER_A
-15E3           3113   
-15E3 DFF5      3114       DJNZ R7, OUTER_A
-15E5           3115   
-15E5 C295      3116       CLR SOUND_OUT          ; stop sound
-15E7 22        3117       RET
-15E8           3118   
-15E8           3119   Delay_A:
-15E8 7D0E      3120       MOV R5, #14        ; 14 � 40 �s = 560 �s
-15EA           3121   DELAY_A_LOOP:
-15EA 12071D    3122       LCALL Wait40uSec
-15ED DDFB      3123       DJNZ R5, DELAY_A_LOOP
-15EF 22        3124       RET
-15F0           3125   
-15F0           3126   ;------------------------------------
-15F0           3127   ; Play_F_0p5s
-15F0           3128   ; Plays ~698 Hz on P1.7 for 0.5 seconds
-15F0           3129   ;------------------------------------
-15F0           3130   playF:
-15F0 7F1A      3131       MOV R7, #26        ; outer loop
-15F2           3132   
-15F2           3133   OUTER_F:
-15F2 7E1B      3134       MOV R6, #27        ; inner loop ? 26 � 27 = 702 toggles
-15F4           3135   
-15F4           3136   INNER_F:
-15F4 B295      3137       CPL SOUND_OUT          ; toggle buzzer pin
-15F6 121600    3138       LCALL Delay_F      ; ~720 �s delay
-15F9 DEF9      3139       DJNZ R6, INNER_F
-15FB           3140   
-15FB DFF5      3141       DJNZ R7, OUTER_F
-15FD           3142   
-15FD C295      3143       CLR SOUND_OUT           ; stop sound
-15FF 22        3144       RET
-1600           3145   
-1600           3146   Delay_F:
-1600 7D12      3147       MOV R5, #18        ; 18 � 40 �s = 720 �s
-1602           3148   DELAY_F_LOOP:
-1602 12071D    3149       LCALL Wait40uSec
-1605 DDFB      3150       DJNZ R5, DELAY_F_LOOP
-1607 22        3151       RET
-1608           3152   
-1608           3153   
-1608           3154   ;------------------------------------
-1608           3155   ; Play_E_0p5s
-1608           3156   ; Plays ~659 Hz on P1.7 for 0.5 seconds
-1608           3157   ;------------------------------------
-1608           3158   playE:
-1608 7F1A      3159       MOV R7, #26        ; outer loop
-160A           3160   
-160A           3161   OUTER_E:
-160A 7E19      3162       MOV R6, #25        ; inner loop ? 26 � 25 = 650 toggles
-160C           3163   
-160C           3164   INNER_E:
-160C B295      3165       CPL SOUND_OUT           ; toggle buzzer pin
-160E 121618    3166       LCALL Delay_E      ; ~760 �s delay
-1611 DEF9      3167       DJNZ R6, INNER_E
-1613           3168   
-1613 DFF5      3169       DJNZ R7, OUTER_E
-1615           3170   
-1615 C295      3171       CLR SOUND_OUT          ; stop sound
-1617 22        3172       RET
-1618           3173       
-1618           3174   Delay_E:
-1618 7D13      3175       MOV R5, #19        ; 19 � 40 �s = 760 �s
-161A           3176   DELAY_E_LOOP:
-161A 12071D    3177       LCALL Wait40uSec
-161D DDFB      3178       DJNZ R5, DELAY_E_LOOP
-161F 22        3179       RET
-1620           3180   
-1620           3181   
-1620           3182   ;------------------------------------
-1620           3183   ; Play_D_0p5s
-1620           3184   ; Plays ~587 Hz on P1.7 for 0.5 seconds
-1620           3185   ;------------------------------------
-1620           3186   playD:
-1620 7F19      3187       MOV R7, #25        ; outer loop
-1622           3188   
-1622           3189   OUTER_D:
-1622 7E18      3190       MOV R6, #24        ; inner loop ? 25 � 24 = 600 toggles
-1624           3191   
-1624           3192   INNER_D:
-1624 B295      3193       CPL SOUND_OUT          ; toggle buzzer pin
-1626 121630    3194       LCALL Delay_D      ; ~840 �s delay
-1629 DEF9      3195       DJNZ R6, INNER_D
-162B           3196   
-162B DFF5      3197       DJNZ R7, OUTER_D
-162D           3198   
-162D C295      3199       CLR SOUND_OUT         ; stop sound
-162F 22        3200       RET
-1630           3201       
-1630           3202   Delay_D:
-1630 7D15      3203       MOV R5, #21        ; 21 � 40 �s = 840 �s
-1632           3204   DELAY_D_LOOP:
-1632 12071D    3205       LCALL Wait40uSec
-1635 DDFB      3206       DJNZ R5, DELAY_D_LOOP
-1637 22        3207       RET
-1638           3208   
-1638           3209   delayHalfSec:
-1638 7A7D      3210            mov     R2, #125
-163A 12163E    3211            lcall WaitmilliSec
-163D           3212            ;lcall WaitmilliSec
-163D 22        3213            ret
-163E           3214   
-163E           3215   ;---------------------------------;
-163E           3216   ; Wait 'R2' milliseconds, blocking;
-163E           3217   ;---------------------------------;
-163E           3218   WaitmilliSec:
-163E C000      3219       push AR0
-1640 C001      3220       push AR1
-1642 7928      3221   loop3: mov R1, #40
-1644 7868      3222   loop2: mov R0, #104
-1646 D8FE      3223   loop1: djnz R0, loop1 ; 4 cycles->4*60.24ns*104=25.0us
-1648 D9FA      3224       djnz R1, loop2 ; 25us*40=1.0ms
-164A DAF6      3225       djnz R2, loop3 ; number of millisecons to wait passed in R2
-164C D001      3226       pop AR1
-164E D000      3227       pop AR0
-1650 22        3228       ret
-1651           3229   ;-------------------------------------------------------------------------------
-1651           3230   
-1651           3231   ;------------------------------------------------------------------------------
-1651           3232   ; dc_control
-1651           3233   ; turns on the dc motor in cooling stage
-1651           3234   ;------------------------------------------------------------------------------
-1651           3235   dc_control:
-1651 E560      3236       mov a, Control_FSM_state
-1653           3237            
-1653           3238            ; handle state 0
-1653 B40004    3239            cjne a, #0, dc_state1
-1656 C2C0      3240            clr DC_OUT
-1658 802C      3241       sjmp dc_control_done
-165A           3242   
-165A           3243            ; handle state 1
-165A           3244            dc_state1:
-165A B40104    3245            cjne a, #1, dc_state2
-165D C2C0      3246            clr DC_OUT
-165F 8025      3247       sjmp dc_control_done
-1661           3248   
-1661           3249            ; handle state 2
-1661           3250            dc_state2:
-1661 B40204    3251            cjne a, #2, dc_state3
-1664 C2C0      3252            clr DC_OUT
-1666 801E      3253       sjmp dc_control_done
-1668           3254   
-1668           3255            ; handle state 3
-1668           3256            dc_state3:
-1668 B40304    3257            cjne a, #3, dc_state4
-166B C2C0      3258            clr DC_OUT
-166D 8017      3259       sjmp dc_control_done
-166F           3260   
-166F           3261            ; handle state 4
-166F           3262            dc_state4:
-166F B40404    3263            cjne a, #4, dc_state5
-1672 C2C0      3264            clr DC_OUT
-1674 8010      3265       sjmp dc_control_done
-1676           3266   
-1676           3267            ; handle state 5
-1676           3268            dc_state5:
-1676 B40504    3269            cjne a, #5, dc_state6
-1679 C2C0      3270            clr DC_OUT
-167B 8009      3271       sjmp dc_control_done
-167D           3272   
-167D           3273            ; handle state 6
-167D           3274            dc_state6:
-167D B40604    3275       cjne a, #6, dc_state7
-1680 D2C0      3276            setb DC_OUT
-1682 8002      3277       sjmp dc_control_done
-1684           3278   
-1684           3279            ; handle state 7
-1684           3280            dc_state7:
-1684 C2C0      3281            clr DC_OUT  
-1686           3282   
-1686           3283   dc_control_done:
-1686 22        3284       ret
-1687           3285   
-1687           3286   ;-------------------------------------------------------------------------------;
-1687           3287   ;         Main program.          
-1687           3288   ;-------------------------------------------------------------------------------;
-1687           3289   main:
-1687           3290   
-1687           3291       ; --------------------------------------------------------
-1687           3292       ; 1. SAFETY SHUTDOWN
-1687           3293       ; --------------------------------------------------------
-1687 C2AF      3294       clr EA              ; FORCE Interrupts OFF immediately
-1689 7581C0    3295       mov SP, #0xC0       ; Reset Stack Pointer to safe location
-168C           3296       
-168C           3297       ; --------------------------------------------------------
-168C           3298       ; THE "DIRTY DELAY" (Fixes Reset Garbage)
-168C           3299       ; We burn ~100ms here using a raw loop. 
-168C           3300       ; We cannot use timers yet because they aren't initialized.
-168C           3301       ; --------------------------------------------------------
-168C 78FA      3302       mov R0, #250
-168E           3303   Reset_Delay_Outer:
-168E 79FF      3304       mov R1, #255
-1690           3305   Reset_Delay_Inner:
-1690 D9FE      3306       djnz R1, Reset_Delay_Inner
-1692 D8FA      3307       djnz R0, Reset_Delay_Outer
-1694           3308       
-1694           3309       ; --- PORT CONFIGURATION ---
-1694 759AAA    3310       mov P0MOD, #0xAA
-1697           3311       ; P1: Mixed usage 
-1697           3312       ; P1.7(LCD_RS), P1.6(Row3), P1.5(Sound), P1.4(Row2)
-1697           3313       ; P1.3(PWM), P1.2(Row1), P1.1(LCD_E) -> All Outputs
-1697           3314       ; P1.0 (Unused/RX) -> Input
-1697           3315       ; Binary: 11111110 -> Hex: 0xFE
-1697 759BFE    3316       mov P1MOD, #0xFE
-169A           3317   
-169A           3318       ; P2: Row4(Out), Cols(In)
-169A           3319       ; P2.0 (Row4) is Out (1). P2.2, P2.4, P2.6 (Cols) are In (0).
-169A           3320       ; Binary: 00000001 -> Hex: 0x01
-169A 759C01    3321       mov P2MOD, #0x01
-169D           3322   
-169D           3323       ; P3: Col4(In)
-169D           3324       ; P3.0 (Col4) is In (0).
-169D 759D00    3325       mov P3MOD, #0x00
-16A0 75C101    3326       mov P4MOD, #00000001B
-16A3           3327   
-16A3           3328       ; Turn off all the LEDs
-16A3 75E800    3329       mov LEDRA, #0 ; LEDRA is bit addressable
-16A6 759500    3330       mov LEDRB, #0 ; LEDRB is NOT bit addresable
-16A9           3331   
-16A9           3332       ; Enable Global interrupts
-16A9 D2AF      3333       setb EA  
-16AB           3334   
-16AB           3335            ; FSM initial states
-16AB 757000    3336            mov SEC_FSM_state, #0
-16AE 756000    3337            mov Control_FSM_state, #0
-16B1 756100    3338            mov Current_State, #0
-16B4           3339            ; FSM timers initialization
-16B4 756F00    3340            mov SEC_FSM_timer, #0
-16B7           3341            ; time counters initialization
-16B7 753000    3342            mov current_time_sec, #0
-16BA 753100    3343            mov current_time_minute, #0
-16BD 753200    3344            mov soak_time_sec, #0
-16C0 753300    3345            mov soak_time_minute, #0
-16C3 753400    3346            mov reflow_time_sec, #0
-16C6 753500    3347            mov reflow_time_minute, #0
-16C9 753600    3348            mov soak_end_time_sec, #0
-16CC 753700    3349            mov soak_end_time_minute, #0
-16CF 753800    3350            mov reflow_end_time_sec, #0
-16D2 753900    3351            mov reflow_end_time_minute, #0
-16D5           3352       ; Initialize counter to zero
-16D5 755C00    3353       mov pwm_counter, #0
-16D8 755D00    3354       mov pwm_counter+1, #0
-16DB 755E00    3355       mov pwm_counter+2, #0
-16DE 755F00    3356       mov pwm_counter+3, #0
-16E1           3357       ; Initialize power output
-16E1 755B00    3358       mov power_output+3, #0
-16E4 755A00    3359       mov power_output+2, #0
-16E7 755902    3360       mov power_output+1, #02H
-16EA 7558EE    3361       mov power_output, #0EEH ; (initilize to 750 for testing)
-16ED           3362            ; FSM Buttons push button init
-16ED 757200    3363            mov     PB0_DEB_state, #0
-16F0 757400    3364            mov     PB2_DEB_state, #0
-16F3 757100    3365            mov     PB0_DEB_timer, #0
-16F6 757300    3366            mov     PB2_DEB_timer, #0
-16F9           3367       ; [FIX] ADD THIS BLOCK TO STOP STARTUP BEEP
-16F9 757600    3368       mov beep_state, #0
-16FC 757500    3369       mov beep_count, #0
-16FF 757700    3370       mov beep_tmr, #0
-1702 757800    3371       mov beep_tmr+1, #0
-1705           3372       ; Buttons 
-1705 757A00    3373       mov BTN_DEB_state, #0
-1708 757B00    3374       mov BTN_DEB_timer, #0
-170B 757C00    3375       mov BTN_DEB_id, #0
-170E 757900    3376       mov servo_pwm_counter, #0
-1711 757D00    3377       mov rx_idx, #0
-1714 757E00    3378       mov rx_ready, #0
-1717 C218      3379       clr one_ms_beep_flag
-1719 C28C      3380       clr TR0 ; Force buzzer hardware OFF
-171B           3381   
-171B           3382            ; Clear all the flags
-171B C295      3383            clr SOUND_OUT
-171D C219      3384       clr beep_error_done
-171F C213      3385            clr tc_missing_abort
-1721 C20B      3386            clr stop_signal
-1723 C215      3387            clr PB0_flag
-1725 C216      3388            clr PB1_flag
-1727 C217      3389            clr PB2_flag
-1729 C201      3390            clr one_second_flag
-172B C204      3391            clr one_second_lcd_flag
-172D C20E      3392            clr config_finish_signal
-172F C20D      3393       clr time_count_doing_signal
-1731 C224      3394       clr fullscreen_update_signal
-1733 C205      3395            clr soak_temp_reached
-1735 C208      3396            clr soak_time_reached
-1737 C206      3397            clr reflow_temp_reached
-1739 C209      3398            clr reflow_time_reached
-173B C207      3399            clr cooling_temp_reached
-173D C210      3400       clr state_change_signal_TC
-173F C211      3401            clr state_change_signal_Count
-1741 C212      3402       clr state_change_beep_signal
-1743 C226      3403       clr one_millisecond_flag_servo
-1745 C229      3404       clr remote_config_mode
-1747 C2C0      3405       clr DC_OUT
-1749           3406       ; Set bit
-1749 D20F      3407            setb state_change_signal
-174B D214      3408       setb tc_startup_window
-174D           3409   
-174D 12045D    3410       lcall Timer0_Init
-1750 1206A6    3411       lcall Timer2_Init
-1753 120779    3412       lcall ELCD_4BIT
-1756           3413       ;----- Two new lines I added to initialize the UI
-1756 1211BD    3414       lcall Init_All_Buffers
-1759 120477    3415       lcall Initialize_Serial_Port
-175C 121550    3416       lcall music
-175F           3417   ;-------------------------------------------------------------------------------;
-175F           3418   ; while(1) loop
-175F           3419   ;-------------------------------------------------------------------------------;
-175F           3420   loop:
-175F           3421   
-175F 120BC4    3422            lcall SEC_FSM
-1762           3423   
-1762           3424            ; Check the FSM for the overall control flow of the reflow process
-1762 120E73    3425       lcall Control_FSM
-1765           3426   
-1765           3427       ; Check the FSM for PB01 debounce
-1765 120B56    3428       lcall PB0_DEB
-1768 120B8E    3429            lcall PB2_DEB
-176B           3430       
-176B           3431       ; Added to take temp readings
-176B 121210    3432       lcall Read_Thermocouple
-176E           3433       
-176E           3434       ; 1. Check if we reached temp (Observer)
-176E 120CAF    3435       lcall Temp_Compare
-1771           3436       
-1771           3437       ; 2. Decide heater power based on flags (Driver)
-1771           3438       ;lcall Power_Control
-1771 1213A3    3439       lcall proportional_power_control
-1774           3440       
-1774 120DA0    3441       lcall Safety_Check_TC
-1777           3442   
-1777 120C20    3443            lcall Time_Counter
-177A           3444   
-177A           3445            ; Update Variables (times and temp)
-177A 120F4E    3446            lcall Update_FSM_Variables
-177D           3447   
-177D           3448       ; GUI Interface polling uart port
-177D 1204AC    3449       lcall Serial_RX_Pump
-1780 120505    3450       lcall Serial_Process_Line
-1783           3451   
-1783           3452            ; Update while at state 1
-1783           3453            ; LCD
-1783 120A02    3454            lcall Update_Screen_Full 
-1786           3455            ; Buttons
-1786 120FD2    3456            lcall Check_Buttons 
-1789           3457            ; PB0pad
-1789 121091    3458       lcall Check_Keypad
-178C           3459   
-178C           3460       ; Update the LCD display based on the current state
-178C 12083E    3461       lcall LCD_Display_Update_func
-178F           3462   
-178F 120C42    3463            lcall Time_Compare_MMSS
-1792           3464   
-1792           3465       ; Update the pwm output for the ssr
-1792 120D29    3466       lcall PWM_Wave 
-1795           3467            ; Update the Buzzer 
-1795 120E3A    3468            lcall Beep_Task
-1798           3469       ; Update the pwm output for the servo
-1798 1212E5    3470       lcall call_servo_control
-179B           3471   
-179B 120DF1    3472       lcall Beep_Judge
-179E           3473   
-179E 121651    3474       lcall dc_control
-17A1           3475   
-17A1           3476       ; After initialization the program stays in this 'forever' loop
-17A1 02175F    3477       ljmp loop
-17A4           3478   ;-------------------------------------------------------------------------------;
-17A4           3479   END
+13B4 12138E    2792       lcall power_leds_low
+13B7 0215A8    2793            ljmp power_control_done
+13BA           2794   
+13BA           2795   state1_power_control:
+13BA           2796            ; idle
+13BA           2797            ; 0% power
+13BA B40112    2798            cjne a, #1, state2_power_control
+13BD 755800    2799            mov power_output, #low(NO_POWER)
+13C0 755900    2800            mov power_output+1, #low(NO_POWER)
+13C3 755A00    2801            mov power_output+2, #0
+13C6 755B00    2802            mov power_output+3, #0
+13C9 12138E    2803       lcall power_leds_low
+13CC 0215A8    2804            ljmp power_control_done
+13CF           2805            
+13CF           2806   state2_power_control:
+13CF           2807            ; ramp to soak, ramp to ~150C
+13CF           2808            ; 100% power
+13CF B40253    2809            cjne a, #2, state3_power_control
+13D2           2810       
+13D2 854B3A    2811       mov x, soak_temp
+13D5 854C3B    2812       mov x+1, soak_temp+1
+13D8 854D3C    2813       mov x+2, soak_temp+2
+13DB 854E3D    2814       mov x+3, soak_temp+3
+13DE 753E05    2815            mov y+0, #low (5 % 0x10000) 
+13E1 753F00    2815            mov y+1, #high(5 % 0x10000) 
+13E4 754000    2815            mov y+2, #low (5 / 0x10000) 
+13E7 754100    2815            mov y+3, #high(5 / 0x10000) 
+13EA 1200F6    2816       lcall sub32 
+13ED           2817       ; now x holds soak_temp-5
+13ED           2818       ; turn power to 20% when current_temp > soak_temp-5
+13ED           2819   
+13ED 85473E    2820       mov y, current_temp
+13F0 85483F    2821       mov y+1, current_temp+1
+13F3 854940    2822       mov y+2, current_temp+2
+13F6 854A41    2823       mov y+3, current_temp+3
+13F9           2824   
+13F9 C200      2825       clr mf
+13FB 120178    2826       lcall x_gteq_y
+13FE           2827       
+13FE 100012    2828       jbc mf, state_2_full_power ; turn on full power when current_temp <= soak_temp-5
+1401           2829       ; turn on 20% power when current_temp > soak_temp-5
+1401 75582C    2830       mov power_output, #low(BASE_POWER)
+1404 755901    2831       mov power_output+1, #high(BASE_POWER)
+1407 755A00    2832       mov power_output+2, #0
+140A 755B00    2833       mov power_output+3, #0
+140D 121395    2834       lcall power_leds_mid
+1410 0215A8    2835       ljmp power_control_done
+1413           2836   
+1413           2837   state_2_full_power:
+1413 7558DC    2838            mov power_output, #low(MAX_POWER)
+1416 755905    2839            mov power_output+1, #high(MAX_POWER)
+1419 755A00    2840            mov power_output+2, #0
+141C 755B00    2841            mov power_output+3, #0
+141F 12139C    2842       lcall power_leds_high
+1422 0215A8    2843            ljmp power_control_done
+1425           2844   
+1425           2845   state3_power_control:
+1425           2846            ; soak period, hold at 150C
+1425           2847            ; 20% base power + proportional calculated power
+1425 B40305    2848            cjne a, #3, jump_state4_power_control
+1428 121395    2849       lcall power_leds_mid
+142B 8003      2850            sjmp state3_power_control_calculation
+142D           2851   
+142D           2852   jump_state4_power_control:
+142D 02155A    2853            ljmp state4_power_control
+1430           2854   
+1430           2855   state3_power_control_calculation:
+1430           2856            ; move soak_temp to x
+1430 854B3A    2857            mov x, soak_temp
+1433 854C3B    2858            mov x+1, soak_temp+1
+1436 854D3C    2859            mov x+2, soak_temp+2
+1439 854E3D    2860            mov x+3, soak_temp+3
+143C           2861            ; move current_temp to y
+143C 85473E    2862            mov y, current_temp
+143F 85483F    2863            mov y+1, current_temp+1
+1442 854940    2864            mov y+2, current_temp+2
+1445 854A41    2865            mov y+3, current_temp+3
+1448           2866   
+1448           2867            ; compare between soak_temp and current_temp
+1448 C200      2868            clr mf
+144A 120178    2869            lcall x_gteq_y
+144D 10002B    2870            jbc mf, st_sub_ct
+1450           2871            ; current_temp - soak_temp if st < ct
+1450 C228      2872            clr soak_temp_greater
+1452           2873            ; move current_temp to y
+1452 854B3E    2874            mov y, soak_temp
+1455 854C3F    2875            mov y+1, soak_temp+1
+1458 854D40    2876            mov y+2, soak_temp+2
+145B 854E41    2877            mov y+3, soak_temp+3
+145E           2878            ; move current_temp to x
+145E 85473A    2879            mov x, current_temp
+1461 85483B    2880            mov x+1, current_temp+1
+1464 85493C    2881            mov x+2, current_temp+2
+1467 854A3D    2882            mov x+3, current_temp+3
+146A 1200F6    2883            lcall sub32
+146D 853A62    2884            mov soak_temp_diff, x
+1470 853B63    2885            mov soak_temp_diff+1, x+1
+1473 853C64    2886            mov soak_temp_diff+2, x+2
+1476 853D65    2887            mov soak_temp_diff+3, x+3
+1479 8011      2888            sjmp proportional_input_soak
+147B           2889   
+147B           2890   st_sub_ct:
+147B           2891            ; soak_temp - current_temp
+147B D228      2892            setb soak_temp_greater
+147D 1200F6    2893            lcall sub32
+1480 853A62    2894            mov soak_temp_diff, x
+1483 853B63    2895            mov soak_temp_diff+1, x+1
+1486 853C64    2896            mov soak_temp_diff+2, x+2
+1489 853D65    2897            mov soak_temp_diff+3, x+3
+148C           2898   
+148C           2899   proportional_input_soak:
+148C           2900            ; proportaional block calculation       
+148C           2901            ; move soak_temp_diff to x
+148C 85623A    2902            mov x, soak_temp_diff
+148F 85633B    2903            mov x+1, soak_temp_diff+1
+1492 85643C    2904            mov x+2, soak_temp_diff+2
+1495 85653D    2905            mov x+3, soak_temp_diff+3
+1498           2906            ; move proportional gain to y
+1498 753E05    2907            mov y+0, #low (KP % 0x10000) 
+149B 753F00    2907            mov y+1, #high(KP % 0x10000) 
+149E 754000    2907            mov y+2, #low (KP / 0x10000) 
+14A1 754100    2907            mov y+3, #high(KP / 0x10000) 
+14A4 12018C    2908            lcall mul32 ; proportional_output = proportional_gain * difference
+14A7           2909            
+14A7 853A66    2910            mov proportional_gain_var, x
+14AA 853B67    2911            mov proportional_gain_var+1, x+1
+14AD 853C68    2912            mov proportional_gain_var+2, x+2
+14B0 853D69    2913            mov proportional_gain_var+3, x+3
+14B3           2914   
+14B3           2915            ; base_power + soak_power when soak_temp > current_temp
+14B3 302829    2916            jnb soak_temp_greater, sub_proportional_soak
+14B6 85663A    2917            mov x, proportional_gain_var
+14B9 85673B    2918            mov x+1, proportional_gain_var+1
+14BC 85683C    2919            mov x+2, proportional_gain_var+2
+14BF 85693D    2920            mov x+3, proportional_gain_var+3
+14C2 753E2C    2921            mov y+0, #low (BASE_POWER % 0x10000) 
+14C5 753F01    2921            mov y+1, #high(BASE_POWER % 0x10000) 
+14C8 754000    2921            mov y+2, #low (BASE_POWER / 0x10000) 
+14CB 754100    2921            mov y+3, #high(BASE_POWER / 0x10000) 
+14CE 1200D3    2922            lcall add32
+14D1           2923            ; x now holds the power output before the saturator
+14D1 853A66    2924            mov proportional_gain_var, x
+14D4 853B67    2925            mov proportional_gain_var+1, x+1
+14D7 853C68    2926            mov proportional_gain_var+2, x+2
+14DA 853D69    2927            mov proportional_gain_var+3, x+3
+14DD 803D      2928            sjmp saturator_soak
+14DF           2929   
+14DF           2930   sub_proportional_soak:
+14DF           2931            ; base_power - soak_power when soak_temp <= current_temp
+14DF 753A2C    2932            mov x+0, #low (BASE_POWER % 0x10000) 
+14E2 753B01    2932            mov x+1, #high(BASE_POWER % 0x10000) 
+14E5 753C00    2932            mov x+2, #low (BASE_POWER / 0x10000) 
+14E8 753D00    2932            mov x+3, #high(BASE_POWER / 0x10000) 
+14EB 85663E    2933            mov y, proportional_gain_var
+14EE 85673F    2934            mov y+1, proportional_gain_var+1
+14F1 856840    2935            mov y+2, proportional_gain_var+2
+14F4 856941    2936            mov y+3, proportional_gain_var+3
+14F7           2937   
+14F7           2938            ; compare whether base_power < proportional_gain_var
+14F7 C200      2939            clr mf
+14F9 12011A    2940            lcall x_lt_y ; set mf to 1 if base_power < proportional_gain_var, clamp output to 0
+14FC 30000E    2941            jnb mf, bp_gteq_pgv
+14FF 756600    2942            mov proportional_gain_var, #low(NO_POWER)
+1502 756700    2943            mov proportional_gain_var+1, #high(NO_POWER)
+1505 756800    2944            mov proportional_gain_var+2, #0
+1508 756900    2945            mov proportional_gain_var+3, #0
+150B 800F      2946            sjmp saturator_soak
+150D           2947   
+150D           2948   bp_gteq_pgv:
+150D           2949            ; calculate subtracted gain
+150D 1200F6    2950            lcall sub32
+1510           2951            ; x now holds the power output before the saturator
+1510 853A66    2952            mov proportional_gain_var, x
+1513 853B67    2953            mov proportional_gain_var+1, x+1
+1516 853C68    2954            mov proportional_gain_var+2, x+2
+1519 853D69    2955            mov proportional_gain_var+3, x+3
+151C           2956   
+151C           2957   saturator_soak:
+151C           2958            ; proportional_gain_var now holds the power output before the saturator
+151C           2959            ; saturate power output to max power
+151C 85663A    2960            mov x, proportional_gain_var
+151F 85673B    2961            mov x+1, proportional_gain_var+1
+1522 85683C    2962            mov x+2, proportional_gain_var+2
+1525 85693D    2963            mov x+3, proportional_gain_var+3
+1528           2964   
+1528 753EDC    2965            mov y+0, #low (MAX_POWER % 0x10000) 
+152B 753F05    2965            mov y+1, #high(MAX_POWER % 0x10000) 
+152E 754000    2965            mov y+2, #low (MAX_POWER / 0x10000) 
+1531 754100    2965            mov y+3, #high(MAX_POWER / 0x10000) 
+1534           2966   
+1534 C200      2967            clr mf
+1536 120136    2968            lcall x_gt_y ; set mf to 1 if calculated power output greater than max power
+1539 20000F    2969            jb mf, saturated_soak
+153C           2970            ; set power_output to calculated power if not saturated
+153C 856658    2971            mov power_output, proportional_gain_var
+153F 856759    2972            mov power_output+1, proportional_gain_var+1
+1542 85685A    2973            mov power_output+2, proportional_gain_var+2
+1545 85695B    2974            mov power_output+3, proportional_gain_var+3
+1548 0215A8    2975            ljmp power_control_done
+154B           2976   
+154B           2977   saturated_soak:
+154B 7558DC    2978            mov power_output, #low(MAX_POWER)
+154E 755905    2979            mov power_output+1, #high(MAX_POWER)
+1551 755A00    2980            mov power_output+2, #0
+1554 755B00    2981            mov power_output+3, #0
+1557 0215A8    2982            ljmp power_control_done
+155A           2983   
+155A           2984   
+155A           2985   state4_power_control:
+155A           2986            ; ramp to reflow, max power
+155A B40412    2987            cjne a, #4, state5_power_control
+155D 7558DC    2988            mov power_output, #low(MAX_POWER)
+1560 755905    2989            mov power_output+1, #high(MAX_POWER)
+1563 755A00    2990            mov power_output+2, #0
+1566 755B00    2991            mov power_output+3, #0
+1569 12139C    2992       lcall power_leds_high
+156C 0215A8    2993            ljmp power_control_done
+156F           2994   
+156F           2995   state5_power_control:
+156F           2996            ; reflow 20% base power
+156F B40512    2997            cjne a, #5, state6_power_control
+1572 75582C    2998            mov power_output, #low(BASE_POWER)  
+1575 755901    2999            mov power_output+1, #high(BASE_POWER)
+1578 755A00    3000            mov power_output+2, #0
+157B 755B00    3001            mov power_output+3, #0
+157E 121395    3002       lcall power_leds_mid
+1581 0215A8    3003            ljmp power_control_done
+1584           3004   
+1584           3005   state6_power_control:
+1584           3006            ; cooling 0% power
+1584 B40612    3007            cjne a, #6, state_7_power_control
+1587 755800    3008            mov power_output, #low(NO_POWER)
+158A 755900    3009            mov power_output+1, #high(NO_POWER)
+158D 755A00    3010            mov power_output+2, #0
+1590 755B00    3011            mov power_output+3, #0
+1593 12138E    3012       lcall power_leds_low
+1596 0215A8    3013            ljmp power_control_done
+1599           3014   
+1599           3015   state_7_power_control:
+1599           3016            ; idle 0% power
+1599 755800    3017            mov power_output, #low(NO_POWER)
+159C 755900    3018            mov power_output+1, #high(NO_POWER)
+159F 755A00    3019            mov power_output+2, #0
+15A2 755B00    3020            mov power_output+3, #0
+15A5 12138E    3021       lcall power_leds_low
+15A8           3022   power_control_done:
+15A8 22        3023            ret
+15A9           3024   
+15A9           3025   ;----------------------------------------------------------------------------------------
+15A9           3026   ; function for playing the boot up music
+15A9           3027   music:
+15A9           3028            ; 1
+15A9 121601    3029            lcall playC
+15AC 121691    3030            lcall delayHalfSec
+15AF           3031            ; 1
+15AF 121601    3032            lcall playC
+15B2 121691    3033            lcall delayHalfSec
+15B5           3034            ; 5
+15B5 121619    3035            lcall playG
+15B8 121691    3036            lcall delayHalfSec
+15BB           3037            ; 5
+15BB 121619    3038            lcall playG
+15BE 121691    3039            lcall delayHalfSec
+15C1           3040            ; 6
+15C1 121631    3041            lcall PlayA
+15C4 121691    3042            lcall delayHalfSec
+15C7           3043            ; 6
+15C7 121631    3044            lcall PlayA
+15CA 121691    3045            lcall delayHalfSec
+15CD           3046            ; 5
+15CD 121619    3047            lcall playG
+15D0 121691    3048            lcall delayHalfSec
+15D3           3049            ; 4
+15D3 121649    3050            lcall playF
+15D6 121691    3051            lcall delayHalfSec
+15D9           3052   
+15D9           3053            ; 4
+15D9 121649    3054            lcall playF
+15DC 121691    3055            lcall delayHalfSec
+15DF           3056            ; 3
+15DF 121661    3057            lcall playE
+15E2 121691    3058            lcall delayHalfSec
+15E5           3059   
+15E5           3060            ; 3
+15E5 121661    3061            lcall playE
+15E8 121691    3062            lcall delayHalfSec
+15EB           3063   
+15EB           3064            ; 2
+15EB 121679    3065            lcall playD
+15EE 121691    3066            lcall delayHalfSec
+15F1           3067   
+15F1           3068            ; 2
+15F1 121679    3069            lcall playD
+15F4 121691    3070            lcall delayHalfSec
+15F7           3071            ; 1
+15F7 121601    3072            lcall playC
+15FA 121691    3073            lcall delayHalfSec
+15FD           3074            
+15FD 121691    3075            lcall delayHalfSec
+1600 22        3076            ret
+1601           3077   
+1601           3078   ;------------------------------------
+1601           3079   ; Play_C_0p5s
+1601           3080   ; Plays ~523 Hz on P1.7 for 0.5 seconds
+1601           3081   ;------------------------------------
+1601           3082   playC:
+1601 7F14      3083       MOV R7, #20        ; outer loop counter
+1603           3084   
+1603           3085   OUTER_LOOP:
+1603 7E1A      3086       MOV R6, #26        ; inner loop counter
+1605           3087   
+1605           3088   INNER_LOOP:
+1605 B295      3089       CPL SOUND_OUT           ; toggle buzzer pin
+1607 121611    3090       LCALL Delay_C      ; ~960 �s delay
+160A DEF9      3091       DJNZ R6, INNER_LOOP
+160C           3092   
+160C DFF5      3093       DJNZ R7, OUTER_LOOP
+160E           3094   
+160E C295      3095       CLR SOUND_OUT           ; stop sound (pin low)
+1610 22        3096       RET
+1611           3097       
+1611           3098   Delay_C:
+1611 7D18      3099       MOV R5, #24        ; 24 � 40 �s = 960 �s
+1613           3100   DELAY_LOOP:
+1613 12071D    3101       LCALL Wait40uSec
+1616 DDFB      3102       DJNZ R5, DELAY_LOOP
+1618 22        3103       RET
+1619           3104       
+1619           3105   
+1619           3106   ;------------------------------------
+1619           3107   ; Play_G_0p5s
+1619           3108   ; Plays ~784 Hz on P1.7 for 0.5 seconds
+1619           3109   ;------------------------------------
+1619           3110   playG:
+1619 7F1F      3111       MOV R7, #31        ; outer loop
+161B           3112   
+161B           3113   OUTER_G:
+161B 7E19      3114       MOV R6, #25        ; inner loop 31 � 25 = 775 toggles
+161D           3115   
+161D           3116   INNER_G:
+161D B295      3117       CPL SOUND_OUT           ; toggle buzzer pin
+161F 121629    3118       LCALL Delay_G      ; ~640 �s delay
+1622 DEF9      3119       DJNZ R6, INNER_G
+1624           3120   
+1624 DFF5      3121       DJNZ R7, OUTER_G
+1626           3122   
+1626 C295      3123       CLR SOUND_OUT           ; stop sound
+1628 22        3124       RET
+1629           3125       
+1629           3126   Delay_G:
+1629 7D10      3127       MOV R5, #16        ; 16 � 40 �s = 640 �s
+162B           3128   DELAY_G_LOOP:
+162B 12071D    3129       LCALL Wait40uSec
+162E DDFB      3130       DJNZ R5, DELAY_G_LOOP
+1630 22        3131       RET
+1631           3132            
+1631           3133    
+1631           3134    ;------------------------------------
+1631           3135   ; Play_A_0p5s
+1631           3136   ; Plays ~880 Hz on P1.7 for 0.5 seconds
+1631           3137   ;------------------------------------
+1631           3138   playA:
+1631 7F22      3139       MOV R7, #34        ; outer loop counter
+1633           3140   
+1633           3141   OUTER_A:
+1633 7E1A      3142       MOV R6, #26        ; inner loop ? 34 � 26 = 884 toggles
+1635           3143   
+1635           3144   INNER_A:
+1635 B295      3145       CPL SOUND_OUT           ; toggle buzzer pin
+1637 121641    3146       LCALL Delay_A      ; ~560 �s delay
+163A DEF9      3147       DJNZ R6, INNER_A
+163C           3148   
+163C DFF5      3149       DJNZ R7, OUTER_A
+163E           3150   
+163E C295      3151       CLR SOUND_OUT          ; stop sound
+1640 22        3152       RET
+1641           3153   
+1641           3154   Delay_A:
+1641 7D0E      3155       MOV R5, #14        ; 14 � 40 �s = 560 �s
+1643           3156   DELAY_A_LOOP:
+1643 12071D    3157       LCALL Wait40uSec
+1646 DDFB      3158       DJNZ R5, DELAY_A_LOOP
+1648 22        3159       RET
+1649           3160   
+1649           3161   ;------------------------------------
+1649           3162   ; Play_F_0p5s
+1649           3163   ; Plays ~698 Hz on P1.7 for 0.5 seconds
+1649           3164   ;------------------------------------
+1649           3165   playF:
+1649 7F1A      3166       MOV R7, #26        ; outer loop
+164B           3167   
+164B           3168   OUTER_F:
+164B 7E1B      3169       MOV R6, #27        ; inner loop ? 26 � 27 = 702 toggles
+164D           3170   
+164D           3171   INNER_F:
+164D B295      3172       CPL SOUND_OUT          ; toggle buzzer pin
+164F 121659    3173       LCALL Delay_F      ; ~720 �s delay
+1652 DEF9      3174       DJNZ R6, INNER_F
+1654           3175   
+1654 DFF5      3176       DJNZ R7, OUTER_F
+1656           3177   
+1656 C295      3178       CLR SOUND_OUT           ; stop sound
+1658 22        3179       RET
+1659           3180   
+1659           3181   Delay_F:
+1659 7D12      3182       MOV R5, #18        ; 18 � 40 �s = 720 �s
+165B           3183   DELAY_F_LOOP:
+165B 12071D    3184       LCALL Wait40uSec
+165E DDFB      3185       DJNZ R5, DELAY_F_LOOP
+1660 22        3186       RET
+1661           3187   
+1661           3188   
+1661           3189   ;------------------------------------
+1661           3190   ; Play_E_0p5s
+1661           3191   ; Plays ~659 Hz on P1.7 for 0.5 seconds
+1661           3192   ;------------------------------------
+1661           3193   playE:
+1661 7F1A      3194       MOV R7, #26        ; outer loop
+1663           3195   
+1663           3196   OUTER_E:
+1663 7E19      3197       MOV R6, #25        ; inner loop ? 26 � 25 = 650 toggles
+1665           3198   
+1665           3199   INNER_E:
+1665 B295      3200       CPL SOUND_OUT           ; toggle buzzer pin
+1667 121671    3201       LCALL Delay_E      ; ~760 �s delay
+166A DEF9      3202       DJNZ R6, INNER_E
+166C           3203   
+166C DFF5      3204       DJNZ R7, OUTER_E
+166E           3205   
+166E C295      3206       CLR SOUND_OUT          ; stop sound
+1670 22        3207       RET
+1671           3208       
+1671           3209   Delay_E:
+1671 7D13      3210       MOV R5, #19        ; 19 � 40 �s = 760 �s
+1673           3211   DELAY_E_LOOP:
+1673 12071D    3212       LCALL Wait40uSec
+1676 DDFB      3213       DJNZ R5, DELAY_E_LOOP
+1678 22        3214       RET
+1679           3215   
+1679           3216   
+1679           3217   ;------------------------------------
+1679           3218   ; Play_D_0p5s
+1679           3219   ; Plays ~587 Hz on P1.7 for 0.5 seconds
+1679           3220   ;------------------------------------
+1679           3221   playD:
+1679 7F19      3222       MOV R7, #25        ; outer loop
+167B           3223   
+167B           3224   OUTER_D:
+167B 7E18      3225       MOV R6, #24        ; inner loop ? 25 � 24 = 600 toggles
+167D           3226   
+167D           3227   INNER_D:
+167D B295      3228       CPL SOUND_OUT          ; toggle buzzer pin
+167F 121689    3229       LCALL Delay_D      ; ~840 �s delay
+1682 DEF9      3230       DJNZ R6, INNER_D
+1684           3231   
+1684 DFF5      3232       DJNZ R7, OUTER_D
+1686           3233   
+1686 C295      3234       CLR SOUND_OUT         ; stop sound
+1688 22        3235       RET
+1689           3236       
+1689           3237   Delay_D:
+1689 7D15      3238       MOV R5, #21        ; 21 � 40 �s = 840 �s
+168B           3239   DELAY_D_LOOP:
+168B 12071D    3240       LCALL Wait40uSec
+168E DDFB      3241       DJNZ R5, DELAY_D_LOOP
+1690 22        3242       RET
+1691           3243   
+1691           3244   delayHalfSec:
+1691 7A7D      3245            mov     R2, #125
+1693 121697    3246            lcall WaitmilliSec
+1696           3247            ;lcall WaitmilliSec
+1696 22        3248            ret
+1697           3249   
+1697           3250   ;---------------------------------;
+1697           3251   ; Wait 'R2' milliseconds, blocking;
+1697           3252   ;---------------------------------;
+1697           3253   WaitmilliSec:
+1697 C000      3254       push AR0
+1699 C001      3255       push AR1
+169B 7928      3256   loop3: mov R1, #40
+169D 7868      3257   loop2: mov R0, #104
+169F D8FE      3258   loop1: djnz R0, loop1 ; 4 cycles->4*60.24ns*104=25.0us
+16A1 D9FA      3259       djnz R1, loop2 ; 25us*40=1.0ms
+16A3 DAF6      3260       djnz R2, loop3 ; number of millisecons to wait passed in R2
+16A5 D001      3261       pop AR1
+16A7 D000      3262       pop AR0
+16A9 22        3263       ret
+16AA           3264   ;-------------------------------------------------------------------------------
+16AA           3265   
+16AA           3266   ;------------------------------------------------------------------------------
+16AA           3267   ; dc_control
+16AA           3268   ; turns on the dc motor in cooling stage
+16AA           3269   ;------------------------------------------------------------------------------
+16AA           3270   dc_control:
+16AA E560      3271       mov a, Control_FSM_state
+16AC           3272            
+16AC           3273            ; handle state 0
+16AC B40004    3274            cjne a, #0, dc_state1
+16AF C2C0      3275            clr DC_OUT
+16B1 802C      3276       sjmp dc_control_done
+16B3           3277   
+16B3           3278            ; handle state 1
+16B3           3279            dc_state1:
+16B3 B40104    3280            cjne a, #1, dc_state2
+16B6 C2C0      3281            clr DC_OUT
+16B8 8025      3282       sjmp dc_control_done
+16BA           3283   
+16BA           3284            ; handle state 2
+16BA           3285            dc_state2:
+16BA B40204    3286            cjne a, #2, dc_state3
+16BD C2C0      3287            clr DC_OUT
+16BF 801E      3288       sjmp dc_control_done
+16C1           3289   
+16C1           3290            ; handle state 3
+16C1           3291            dc_state3:
+16C1 B40304    3292            cjne a, #3, dc_state4
+16C4 C2C0      3293            clr DC_OUT
+16C6 8017      3294       sjmp dc_control_done
+16C8           3295   
+16C8           3296            ; handle state 4
+16C8           3297            dc_state4:
+16C8 B40404    3298            cjne a, #4, dc_state5
+16CB C2C0      3299            clr DC_OUT
+16CD 8010      3300       sjmp dc_control_done
+16CF           3301   
+16CF           3302            ; handle state 5
+16CF           3303            dc_state5:
+16CF B40504    3304            cjne a, #5, dc_state6
+16D2 C2C0      3305            clr DC_OUT
+16D4 8009      3306       sjmp dc_control_done
+16D6           3307   
+16D6           3308            ; handle state 6
+16D6           3309            dc_state6:
+16D6 B40604    3310       cjne a, #6, dc_state7
+16D9 D2C0      3311            setb DC_OUT
+16DB 8002      3312       sjmp dc_control_done
+16DD           3313   
+16DD           3314            ; handle state 7
+16DD           3315            dc_state7:
+16DD C2C0      3316            clr DC_OUT  
+16DF           3317   
+16DF           3318   dc_control_done:
+16DF 22        3319       ret
+16E0           3320   
+16E0           3321   ;-------------------------------------------------------------------------------;
+16E0           3322   ;         Main program.          
+16E0           3323   ;-------------------------------------------------------------------------------;
+16E0           3324   main:
+16E0           3325   
+16E0           3326       ; --------------------------------------------------------
+16E0           3327       ; 1. SAFETY SHUTDOWN
+16E0           3328       ; --------------------------------------------------------
+16E0 C2AF      3329       clr EA              ; FORCE Interrupts OFF immediately
+16E2 7581C0    3330       mov SP, #0xC0       ; Reset Stack Pointer to safe location
+16E5           3331       
+16E5           3332       ; --------------------------------------------------------
+16E5           3333       ; THE "DIRTY DELAY" (Fixes Reset Garbage)
+16E5           3334       ; We burn ~100ms here using a raw loop. 
+16E5           3335       ; We cannot use timers yet because they aren't initialized.
+16E5           3336       ; --------------------------------------------------------
+16E5 78FA      3337       mov R0, #250
+16E7           3338   Reset_Delay_Outer:
+16E7 79FF      3339       mov R1, #255
+16E9           3340   Reset_Delay_Inner:
+16E9 D9FE      3341       djnz R1, Reset_Delay_Inner
+16EB D8FA      3342       djnz R0, Reset_Delay_Outer
+16ED           3343       
+16ED           3344       ; --- PORT CONFIGURATION ---
+16ED 759AAA    3345       mov P0MOD, #0xAA
+16F0           3346       ; P1: Mixed usage 
+16F0           3347       ; P1.7(LCD_RS), P1.6(Row3), P1.5(Sound), P1.4(Row2)
+16F0           3348       ; P1.3(PWM), P1.2(Row1), P1.1(LCD_E) -> All Outputs
+16F0           3349       ; P1.0 (Unused/RX) -> Input
+16F0           3350       ; Binary: 11111110 -> Hex: 0xFE
+16F0 759BFE    3351       mov P1MOD, #0xFE
+16F3           3352   
+16F3           3353       ; P2: Row4(Out), Cols(In)
+16F3           3354       ; P2.0 (Row4) is Out (1). P2.2, P2.4, P2.6 (Cols) are In (0).
+16F3           3355       ; Binary: 00000001 -> Hex: 0x01
+16F3 759C01    3356       mov P2MOD, #0x01
+16F6           3357   
+16F6           3358       ; P3: Col4(In)
+16F6           3359       ; P3.0 (Col4) is In (0).
+16F6 759D40    3360       mov P3MOD, #01000000B
+16F9 75C101    3361       mov P4MOD, #00000001B
+16FC           3362   
+16FC           3363       ; Turn off all the LEDs
+16FC 75E800    3364       mov LEDRA, #0 ; LEDRA is bit addressable
+16FF 759500    3365       mov LEDRB, #0 ; LEDRB is NOT bit addresable
+1702           3366   
+1702           3367       ; Enable Global interrupts
+1702 D2AF      3368       setb EA  
+1704           3369   
+1704           3370            ; FSM initial states
+1704 757000    3371            mov SEC_FSM_state, #0
+1707 756000    3372            mov Control_FSM_state, #0
+170A 756100    3373            mov Current_State, #0
+170D           3374            ; FSM timers initialization
+170D 756F00    3375            mov SEC_FSM_timer, #0
+1710           3376            ; time counters initialization
+1710 753000    3377            mov current_time_sec, #0
+1713 753100    3378            mov current_time_minute, #0
+1716 753200    3379            mov soak_time_sec, #0
+1719 753300    3380            mov soak_time_minute, #0
+171C 753400    3381            mov reflow_time_sec, #0
+171F 753500    3382            mov reflow_time_minute, #0
+1722 753600    3383            mov soak_end_time_sec, #0
+1725 753700    3384            mov soak_end_time_minute, #0
+1728 753800    3385            mov reflow_end_time_sec, #0
+172B 753900    3386            mov reflow_end_time_minute, #0
+172E           3387       ; Initialize counter to zero
+172E 755C00    3388       mov pwm_counter, #0
+1731 755D00    3389       mov pwm_counter+1, #0
+1734 755E00    3390       mov pwm_counter+2, #0
+1737 755F00    3391       mov pwm_counter+3, #0
+173A           3392       ; Initialize power output
+173A 755B00    3393       mov power_output+3, #0
+173D 755A00    3394       mov power_output+2, #0
+1740 755902    3395       mov power_output+1, #02H
+1743 7558EE    3396       mov power_output, #0EEH ; (initilize to 750 for testing)
+1746           3397            ; FSM Buttons push button init
+1746 757200    3398            mov     PB0_DEB_state, #0
+1749 757400    3399            mov     PB2_DEB_state, #0
+174C 757100    3400            mov     PB0_DEB_timer, #0
+174F 757300    3401            mov     PB2_DEB_timer, #0
+1752           3402       ; [FIX] ADD THIS BLOCK TO STOP STARTUP BEEP
+1752 757600    3403       mov beep_state, #0
+1755 757500    3404       mov beep_count, #0
+1758 757700    3405       mov beep_tmr, #0
+175B 757800    3406       mov beep_tmr+1, #0
+175E           3407       ; Buttons 
+175E 757A00    3408       mov BTN_DEB_state, #0
+1761 757B00    3409       mov BTN_DEB_timer, #0
+1764 757C00    3410       mov BTN_DEB_id, #0
+1767 757900    3411       mov servo_pwm_counter, #0
+176A 757D00    3412       mov rx_idx, #0
+176D 757E00    3413       mov rx_ready, #0
+1770 C218      3414       clr one_ms_beep_flag
+1772 C28C      3415       clr TR0 ; Force buzzer hardware OFF
+1774           3416   
+1774           3417            ; Clear all the flags
+1774 C295      3418            clr SOUND_OUT
+1776 C219      3419       clr beep_error_done
+1778 C213      3420            clr tc_missing_abort
+177A C20B      3421            clr stop_signal
+177C C215      3422            clr PB0_flag
+177E C216      3423            clr PB1_flag
+1780 C217      3424            clr PB2_flag
+1782 C201      3425            clr one_second_flag
+1784 C204      3426            clr one_second_lcd_flag
+1786 C20E      3427            clr config_finish_signal
+1788 C20D      3428       clr time_count_doing_signal
+178A C224      3429       clr fullscreen_update_signal
+178C C205      3430            clr soak_temp_reached
+178E C208      3431            clr soak_time_reached
+1790 C206      3432            clr reflow_temp_reached
+1792 C209      3433            clr reflow_time_reached
+1794 C207      3434            clr cooling_temp_reached
+1796 C210      3435       clr state_change_signal_TC
+1798 C211      3436            clr state_change_signal_Count
+179A C212      3437       clr state_change_beep_signal
+179C C226      3438       clr one_millisecond_flag_servo
+179E C229      3439       clr remote_config_mode
+17A0 C2C0      3440       clr DC_OUT
+17A2           3441       ; Set bit
+17A2 D20F      3442            setb state_change_signal
+17A4 D214      3443       setb tc_startup_window
+17A6           3444   
+17A6 12045D    3445       lcall Timer0_Init
+17A9 1206A6    3446       lcall Timer2_Init
+17AC 120779    3447       lcall ELCD_4BIT
+17AF           3448       ;----- Two new lines I added to initialize the UI
+17AF 1211BD    3449       lcall Init_All_Buffers
+17B2 120477    3450       lcall Initialize_Serial_Port
+17B5 1215A9    3451       lcall music
+17B8           3452   ;-------------------------------------------------------------------------------;
+17B8           3453   ; while(1) loop
+17B8           3454   ;-------------------------------------------------------------------------------;
+17B8           3455   loop:
+17B8           3456   
+17B8 120BC4    3457            lcall SEC_FSM
+17BB           3458   
+17BB           3459            ; Check the FSM for the overall control flow of the reflow process
+17BB 120E73    3460       lcall Control_FSM
+17BE           3461   
+17BE           3462       ; Check the FSM for PB01 debounce
+17BE 120B56    3463       lcall PB0_DEB
+17C1 120B8E    3464            lcall PB2_DEB
+17C4           3465       
+17C4           3466       ; Added to take temp readings
+17C4 121210    3467       lcall Read_Thermocouple
+17C7           3468       
+17C7           3469       ; 1. Check if we reached temp (Observer)
+17C7 120CAF    3470       lcall Temp_Compare
+17CA           3471       
+17CA           3472       ; 2. Decide heater power based on flags (Driver)
+17CA           3473       ;lcall Power_Control
+17CA 1213A3    3474       lcall proportional_power_control
+17CD           3475       
+17CD 120DA0    3476       lcall Safety_Check_TC
+17D0           3477   
+17D0 120C20    3478            lcall Time_Counter
+17D3           3479   
+17D3           3480            ; Update Variables (times and temp)
+17D3 120F4E    3481            lcall Update_FSM_Variables
+17D6           3482   
+17D6           3483       ; GUI Interface polling uart port
+17D6 1204AC    3484       lcall Serial_RX_Pump
+17D9 120505    3485       lcall Serial_Process_Line
+17DC           3486   
+17DC           3487            ; Update while at state 1
+17DC           3488            ; LCD
+17DC 120A02    3489            lcall Update_Screen_Full 
+17DF           3490            ; Buttons
+17DF 120FD2    3491            lcall Check_Buttons 
+17E2           3492            ; PB0pad
+17E2 121091    3493       lcall Check_Keypad
+17E5           3494   
+17E5           3495       ; Update the LCD display based on the current state
+17E5 12083E    3496       lcall LCD_Display_Update_func
+17E8           3497   
+17E8 120C42    3498            lcall Time_Compare_MMSS
+17EB           3499   
+17EB           3500       ; Update the pwm output for the ssr
+17EB 120D29    3501       lcall PWM_Wave 
+17EE           3502            ; Update the Buzzer 
+17EE 120E3A    3503            lcall Beep_Task
+17F1           3504       ; Update the pwm output for the servo
+17F1 1212E5    3505       lcall call_servo_control
+17F4           3506   
+17F4 120DF1    3507       lcall Beep_Judge
+17F7           3508   
+17F7 1216AA    3509       lcall dc_control
+17FA           3510   
+17FA           3511       ; After initialization the program stays in this 'forever' loop
+17FA 0217B8    3512       ljmp loop
+17FD           3513   ;-------------------------------------------------------------------------------;
+17FD           3514   END

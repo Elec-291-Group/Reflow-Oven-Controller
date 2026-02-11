@@ -2768,7 +2768,7 @@ power_leds_low:
 
 power_leds_mid:
     setb LED_LEFT
-    setb LED_MID
+    clr LED_MID
     clr  LED_RIGHT
     ret
 
@@ -2789,6 +2789,7 @@ state0_power_control:
 	mov power_output+1, #low(NO_POWER)
 	mov power_output+2, #0
 	mov power_output+3, #0
+    lcall power_leds_low
 	ljmp power_control_done
 
 state1_power_control:
@@ -2799,22 +2800,53 @@ state1_power_control:
 	mov power_output+1, #low(NO_POWER)
 	mov power_output+2, #0
 	mov power_output+3, #0
+    lcall power_leds_low
 	ljmp power_control_done
 	
 state2_power_control:
 	; ramp to soak, ramp to ~150C
 	; 100% power
 	cjne a, #2, state3_power_control
+    
+    mov x, soak_temp
+    mov x+1, soak_temp+1
+    mov x+2, soak_temp+2
+    mov x+3, soak_temp+3
+    Load_Y(5)
+    lcall sub32 
+    ; now x holds soak_temp-5
+    ; turn power to 20% when current_temp > soak_temp-5
+
+    mov y, current_temp
+    mov y+1, current_temp+1
+    mov y+2, current_temp+2
+    mov y+3, current_temp+3
+
+    clr mf
+    lcall x_gteq_y
+    
+    jbc mf, state_2_full_power ; turn on full power when current_temp <= soak_temp-5
+    ; turn on 20% power when current_temp > soak_temp-5
+    mov power_output, #low(BASE_POWER)
+    mov power_output+1, #high(BASE_POWER)
+    mov power_output+2, #0
+    mov power_output+3, #0
+    lcall power_leds_mid
+    ljmp power_control_done
+
+state_2_full_power:
 	mov power_output, #low(MAX_POWER)
 	mov power_output+1, #high(MAX_POWER)
 	mov power_output+2, #0
 	mov power_output+3, #0
+    lcall power_leds_high
 	ljmp power_control_done
 
 state3_power_control:
 	; soak period, hold at 150C
 	; 20% base power + proportional calculated power
 	cjne a, #3, jump_state4_power_control
+    lcall power_leds_mid
 	sjmp state3_power_control_calculation
 
 jump_state4_power_control:
@@ -2957,6 +2989,7 @@ state4_power_control:
 	mov power_output+1, #high(MAX_POWER)
 	mov power_output+2, #0
 	mov power_output+3, #0
+    lcall power_leds_high
 	ljmp power_control_done
 
 state5_power_control:
@@ -2966,6 +2999,7 @@ state5_power_control:
 	mov power_output+1, #high(BASE_POWER)
 	mov power_output+2, #0
 	mov power_output+3, #0
+    lcall power_leds_mid
 	ljmp power_control_done
 
 state6_power_control:
@@ -2975,6 +3009,7 @@ state6_power_control:
 	mov power_output+1, #high(NO_POWER)
 	mov power_output+2, #0
 	mov power_output+3, #0
+    lcall power_leds_low
 	ljmp power_control_done
 
 state_7_power_control:
@@ -2983,7 +3018,7 @@ state_7_power_control:
 	mov power_output+1, #high(NO_POWER)
 	mov power_output+2, #0
 	mov power_output+3, #0
-
+    lcall power_leds_low
 power_control_done:
 	ret
 
@@ -3322,7 +3357,7 @@ Reset_Delay_Inner:
 
     ; P3: Col4(In)
     ; P3.0 (Col4) is In (0).
-    mov P3MOD, #0x00
+    mov P3MOD, #01000000B
     mov P4MOD, #00000001B
 
     ; Turn off all the LEDs
