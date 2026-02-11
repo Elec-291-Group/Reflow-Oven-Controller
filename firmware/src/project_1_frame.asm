@@ -195,9 +195,8 @@ BEEP_OFF_MS    EQU 100  ; 100ms
 
 PWM_OUT        EQU P1.3 ; Pin connected to the ssr for outputing pwm signal
 
-; These 'equ' must match the wiring between the DE10Lite board and the LCD!
+; These 'equ' must match the wiring between the DE10Lite board and the LCD
 ; P0 is in connector JPIO.
-
 ;Added correct I/O definitions
 ;-- LCD Pins ---
 ELCD_RS equ P1.7
@@ -225,7 +224,10 @@ COL2 equ P2.4
 COL3 equ P2.6
 COL4 equ P3.0
 
-SERVO_OUT      EQU P3.6 ; servo pin
+SERVO_OUT      EQU p3.6 ; servo pin
+LED_LEFT       EQU P3.4 ; left LED (PB3.4)
+LED_MID        EQU P3.3 ; middle LED (PB3.3)
+LED_RIGHT      EQU P3.2 ; right LED (PB3.2)
 
 SERVO_PERIOD   EQU 20 ; pwm signal period for the servo motor (20 ms)
 SERVO_0        EQU 1 ; pwm high time for the servo motor to stay at 0 degree
@@ -235,9 +237,10 @@ COLD_JUNCTION_TEMP equ 20
 MAX_POWER	   EQU 1500 ; max oven power
 NO_POWER	   EQU 0    ; no power
 BASE_POWER     EQU (MAX_POWER/5) ; 20% base power for state 2, 4
+HALF_POWER     EQU (MAX_POWER/2) ; 50% power indicator
 KP			   EQU 5 ; proportional gain
 
-;                     1234567890123456 <-- 16 characters per line LCD
+;1234567890123456 <-- 16 characters per line LCD
 Initial_Message:  db 'initial message', 0
 String_state0_1:  db 'Welcome        ', 0
 String_state0_2:  db 'Press PB0      ', 0
@@ -249,7 +252,7 @@ Txt_SoakTime: db 'Set Soak Time   ', 0
 Txt_ReflT:    db 'Set Reflow Temp ', 0
 Txt_ReflTime: db 'Set Reflow Time ', 0
 
-;                       1234567890123456
+; 1234567890123456
 String_state1:      db 'Set Parameters ', 0
 String_soak_temp:   db 'Soak Temp:', 0
 String_reflow_temp: db 'Reflow Temp:', 0
@@ -258,7 +261,7 @@ String_reflow_time: db 'Reflow Time:', 0
 
 String_temp_line:  db 'Temp: ', 0
 
-;                     1234567890123456
+; 1234567890123456
 String_state2:    db 'Ramp to Soak   ', 0
 String_state3:    db 'Soak Phase     ', 0
 String_state4:    db 'Ramp to Reflow ', 0
@@ -707,8 +710,6 @@ Send32:
     mov A, #0AH
     lcall putchar
     ret
-; -----------------------------------------------------------------------------------------------;
-
 ;-------------------------------------------------------------------------------
 ; Serial temperature line for PuTTY/screen
 ; Outputs: "Temp: XXXC\r\n"
@@ -765,12 +766,9 @@ Serial_Skip_Tens:
     mov a, #0AH     ; LF
     lcall putchar
     ret
-
-;-----------------------------------------------------------------------------------------------;
+;-------------------------------------------------------------------------------
 $include(..\inc\Timer2_ISR.inc) ; Timer 2 ISR for 1ms tick and pwm signal generation
 $include(..\inc\LCD_4bit_DE10Lite_no_RW.inc) ; LCD related functions and utility macros
-;-----------------------------------------------------------------------------------------------;
-
 ;-------------------------------------------------------------------------------
 ; Display Function for 7-segment displays       
 ;-------------------------------------------------------------------------------
@@ -890,7 +888,7 @@ LCD_Check_2: ; Ramp to Soak
     cjne a, #2, LCD_Check_3
     Set_Cursor(1,1)
     Send_Constant_String(#String_state2)
-    ljmp LCD_Update_Temp_Value ; Draw Temp immediately!
+    ljmp LCD_Update_Temp_Value
 
 LCD_Check_3: ; Soak
     cjne a, #3, LCD_Check_4
@@ -917,7 +915,6 @@ LCD_Check_6: ; Cooling
     ljmp LCD_Update_Temp_Value
 
 LCD_Check_7: ; Done
-    ; [FIX] Check distance safe logic for State 7
     cjne a, #7, LCD_Done_Bridge ; If not 7, we are done
     Set_Cursor(1,1)
     Send_Constant_String(#String_state7)
@@ -927,10 +924,10 @@ LCD_Check_7: ; Done
 LCD_Done_Bridge:
     ljmp LCD_Done
 
-; ==========================================
-; PART 2: DYNAMIC VALUES (Temperature)
-; Runs every time 'one_second_flag' is set
-; ==========================================
+;-------------------------------------------------------------------------------
+; PART 2: dyanmic for temp
+; runs every time 'one_second_flag' is set
+;-------------------------------------------------------------------------------
 Check_Live_Update:
     jnb one_second_flag, LCD_Done_Bridge
     clr one_second_flag
@@ -952,49 +949,32 @@ Check_St6:
     cjne a, #6, LCD_Done
     sjmp LCD_Update_Temp_Value
 
-; --- HELPER: Prints "XXX C" on Line 2 ---
 LCD_Update_Temp_Value:
     Set_Cursor(2, 1)
-    
-    ; Convert current_temp to BCD
     mov x, current_temp
     mov x+1, current_temp+1
     mov x+2, current_temp+2
     mov x+3, current_temp+3
     lcall hex2bcd
-
-    ; Update HEX2-HEX0 with temperature
-    lcall Update_HEX_Temp
-    
-    ; Print Hundreds
+    lcall Update_HEX_Temp 
     mov a, bcd+1
     anl a, #0x0F
     add a, #0x30
     lcall ?WriteData
-    
-    ; Print Tens
     mov a, bcd+0
     swap a
     anl a, #0x0F
     add a, #0x30
     lcall ?WriteData
-    
-    ; Print Ones
     mov a, bcd+0
     anl a, #0x0F
     add a, #0x30
     lcall ?WriteData
-    
-    ; Print 'C'
     mov a, #'C'
     lcall ?WriteData
-    
-    ; Clear remaining line space (prevents garbage)
     mov a, #' '
     lcall ?WriteData
     lcall ?WriteData
-
-    ; Print time MM:SS at bottom right
     Set_Cursor(2, 12)
     mov a, current_time_minute
     lcall LCD_Print_2Digits
@@ -1002,8 +982,6 @@ LCD_Update_Temp_Value:
     lcall ?WriteData
     mov a, current_time_sec
     lcall LCD_Print_2Digits
-
-    ; Mirror temp to serial (PuTTY/screen)
     lcall Serial_Send_Temp_Line
 
 LCD_Done:
@@ -1764,9 +1742,7 @@ Beep_Start:
     setb ET0             ; [FIX] Ensure Interrupt is enabled
     setb TR0             ; START the 2kHz tone
     ret
-;============================================================
-
-;============================================================
+;-------------------------------------------------------------------------------
 ; Buzzer beep Task 
 ; Purpose: beeps, holds, stop
 ; Buzzer task:
@@ -1788,7 +1764,7 @@ Beep_Task:
     inc beep_tmr+1
 
 Beep_Check:
-    ; [FIX] FUZZY TIMER CHECK
+    ; FUZZY TIMER CHECK
     ; Check if High Byte is non-zero (Time >= 256ms)
     mov a, beep_tmr+1
     jz Beep_Done        ; If 0, keep beeping
@@ -1822,13 +1798,8 @@ Beep_Stop:
 
 Beep_Done:
     ret
-;==================================================================
-
 ;-------------------------------------------------------------------------------;
 ; Main Control FSM for the entire process
-;-------------------------------------------------------------------------------;
-;-------------------------------------------------------------------------------;
-; FSM LOGIC (Button Logic Fixed)
 ;-------------------------------------------------------------------------------;
 Control_FSM:
     mov a, Control_FSM_state
@@ -1881,7 +1852,7 @@ Control_FSM_state2:
 State2_Check:
     jnb soak_temp_reached, State2_Ret
     
-    ; --- We reached Temp! Move to State 3 ---
+    ; --- Move to State 3 ---
     clr soak_temp_reached
     clr soak_time_reached
 	sjmp Control_FSM_state3_a
@@ -2058,7 +2029,7 @@ Parse_Temp_Loop:
 Parse_Temp_Done:
     ret
 
-; --- Helper: Parse "MMSS" to Seconds ---
+; --- Parse "MMSS" to ceconds ---
 Parse_Time_String:
     ; Minutes tens
     mov A, @R0
@@ -2259,7 +2230,6 @@ Check_Buttons_Done:
     pop PSW
     pop ACC
     ret
-
 ; ----------------------------------------------------------------
 ; MODULE: KEYPAD HANDLER (Input Logic)
 ; ----------------------------------------------------------------
@@ -2274,11 +2244,9 @@ Check_Keypad:
     lcall Keypad_Scan
     jnc Keypad_Exit         ; Carry = 0 means no key pressed
 
-    ; --- Check Special Keys ---
     mov A, R7
     cjne A, #14, Check_Hash ; 14 is Star (*)
     
-    ; Star Key Pressed: Reset Buffer
     lcall Reset_Current_Buffer
     setb fullscreen_update_signal
     mov Cursor_Idx, #0
@@ -2286,8 +2254,8 @@ Check_Keypad:
 
 Check_Hash:
     mov A, R7
-    cjne A, #12, Check_Numeric ; 12 is Hash (#)
-    ret                     ; Ignore Hash key
+    cjne A, #12, Check_Numeric 
+    ret                
 
 Check_Numeric:
     ; Ensure key is 0-9
@@ -2301,7 +2269,7 @@ Check_Numeric:
     add A, #0x30
     mov R5, A
 
-    ; Save to Buffer
+    ;save to Buffer
     lcall Get_Current_Buffer_Addr
     mov A, Cursor_Idx
     add A, R0
@@ -2310,7 +2278,7 @@ Check_Numeric:
     mov @R0, A
     inc Cursor_Idx
 
-    ; --- Check Cursor Limits ---
+    ;Check cursor limits ---
     mov A, Current_State
     cjne A, #1, Check_Limit_Time_1
     sjmp Limit_Temp_3
@@ -2322,13 +2290,13 @@ Check_Limit_Time_1:
 Limit_Temp_3:
     mov A, Cursor_Idx
     cjne A, #3, Do_Refresh
-    dec Cursor_Idx          ; Stay at last digit
+    dec Cursor_Idx          
     sjmp Do_Refresh
 
 Limit_Time_4:
     mov A, Cursor_Idx
     cjne A, #4, Do_Refresh
-    dec Cursor_Idx          ; Stay at last digit
+    dec Cursor_Idx         
     sjmp Do_Refresh
 
 Do_Refresh:
@@ -2340,11 +2308,10 @@ Symbol_Key_Ignored:
 Keypad_Exit:
     ret
 
-; ----------------------------------------------------------------
-; MODULE: HARDWARE SCANNER (Matrix Logic)
-; ----------------------------------------------------------------
+;-------------------------------------------------------------------------------
+; hardware
+;-------------------------------------------------------------------------------
 Keypad_Scan:
-    ; Step 1: Check if ANY key is pressed (All Rows Low)
     clr ROW1
     clr ROW2
     clr ROW3
@@ -2407,7 +2374,7 @@ Keypad_Find_Row:
     clr C
     ret
 
-; Key Mapping (Renamed to avoid conflicts)
+; Key Mapping
 Keypad_Key_1: mov R7, #1
        sjmp Wait_Release
 Keypad_Key_2: mov R7, #2
@@ -2461,16 +2428,16 @@ Wait_25ms:
     ; 2. Check if we just finished
     jnb wait25_done, Start_New_Timer
     
-    ; 3. Timer is DONE! Reset flags and return True
+    ; 3. Timer is done
     clr wait25_done
-    setb C          ; Carry = 1 means "Done"
+    setb C          ; Carry = 1 means done
     ret
 
 Start_New_Timer:
     ; 4. Start a new 25ms wait
     mov wait25_count, #0
     setb wait25_active
-    clr C           ; Carry = 0 means "Not Done Yet"
+    clr C           ; Carry = 0 means not yet
     ret
 
 Check_Timer_Status:
@@ -2478,9 +2445,9 @@ Check_Timer_Status:
     clr C           ; Carry = 0 means "Not Done Yet"
     ret
 
-; ----------------------------------------------------------------
-; MODULE: BUFFER INIT (Reset Logic)
-; ----------------------------------------------------------------
+;-------------------------------------------------------------------------------
+; reset logic
+;-------------------------------------------------------------------------------
 Init_All_Buffers:
     mov R0, #Buf_Soak_Temp
     lcall Init_Temp_Template
@@ -2539,75 +2506,60 @@ Reset_Chk_4:
 ; MODULE: THERMOCOUPLE ADC DRIVER (WITH NOISE SUPPRESSION & JUMP FIX)
 ; ================================================================
 Read_Thermocouple:
-    ; 1. Check Non-Blocking Timer
     lcall Wait_25ms
-    
-    ; [FIX] TRAMPOLINE JUMP
-    ; "jnc" cannot jump to the end because the code is too long.
-    ; We invert logic: If Carry=1 (Time is up), Jump NEARBY.
     jc Proceed_Reading
-    ret  ; If Carry=0, Return immediately.
+    ret 
 
 Proceed_Reading:
-    ; --- 25ms Passed! Time to Read ---
-
-    ; [FIX] SILENCE THE BUZZER (Noise Suppression)
-    ; Save buzzer state and force it OFF during the sensitive read
     mov A, TCON      
-    anl A, #0x10     ; Isolate TR0 bit
-    push acc         ; Save it
-    clr TR0          ; STOP NOISE
+    anl A, #0x10    
+    push acc         
+    clr TR0         
 
-    ; 2. Initialize / Trigger ADC
-    mov ADC_C, #0x80    ; Reset
+    mov ADC_C, #0x80    
     nop
     nop
-    mov ADC_C, #0x01    ; Start Channel 0
+    mov ADC_C, #0x01   
     
-    ; 3. Settle Delay
     mov R5, #250
 ADC_Settle_Loop:
     nop
     nop
     djnz R5, ADC_Settle_Loop
     
-    ; 4. Read Raw Data
     mov x+0, ADC_L
     mov x+1, ADC_H
     mov x+2, #0
     mov x+3, #0
     
-    ; 5. Mask Data
     mov a, x+1
     anl a, #0x0F
     mov x+1, a
     
-    ; [FIX] RESTORE THE BUZZER
-    pop acc          ; Get previous state
-    jz Skip_Restore  ; If it was OFF, keep it OFF
-    setb TR0         ; If it was ON, turn it back ON
+    pop acc         
+    jz Skip_Restore 
+    setb TR0       
 Skip_Restore:
 
-    ; 6. Math Conversions
+	; as per our volatge reference (measured using the DMM)
     Load_y(4118)
     lcall mul32       
 
-    mov ADC_C, #0x04    ; Read LM4040
+    mov ADC_C, #0x04   
     mov y+0, ADC_L      
     mov y+1, ADC_H      
     mov y+2, #0
     mov y+3, #0
-    mov ADC_C, #0x00    ; Reset
+    mov ADC_C, #0x00   
     
     lcall div32         
     Load_Y(100)
     lcall mul32
-    Load_y(1323)        
+    Load_y(1323) ;using our amplifiers resistance ratio and 41uV   
     lcall div32    
     Load_y(COLD_JUNCTION_TEMP)
     lcall add32     
     
-    ; 8. Store Result
     mov current_temp+0, x+0
     mov current_temp+1, x+1
     mov current_temp+2, x+2
@@ -2615,11 +2567,10 @@ Skip_Restore:
 
     ret
     
-; ================================================================
-; MODULE: POWER CONTROLLER (The Brain)
-; ================================================================
+;-------------------------------------------------------------------------------
+; power control
+;-------------------------------------------------------------------------------
 Power_Control:
-    ; Default: Turn Heat OFF (Safety)
     mov power_output+0, #0
     mov power_output+1, #0
     mov power_output+2, #0
@@ -2629,34 +2580,27 @@ Power_Control:
 
     ; --- State 2: RAMP TO SOAK ---
     cjne a, #2, PC_Check_Soak
-    ; Mode: Full Speed Ahead
     sjmp Set_Max_Power
 
 PC_Check_Soak:
     ; --- State 3: SOAK PHASE ---
     cjne a, #3, PC_Check_Ramp_Reflow
-    ; Mode: Maintenance (Low Power)
-    ; If Temp > Target, OFF. If Temp < Target, 20% Power.
-    jb soak_temp_reached, PC_Done ; If hot enough, stay OFF
-    sjmp Set_20_Percent_Power     ; If cold, use 20%
+    jb soak_temp_reached, PC_Done 
+    sjmp Set_20_Percent_Power     
 
 PC_Check_Ramp_Reflow:
     ; --- State 4: RAMP TO REFLOW ---
     cjne a, #4, PC_Check_Reflow
-    ; Mode: Full Speed Ahead
     sjmp Set_Max_Power
 
 PC_Check_Reflow:
     ; --- State 5: REFLOW PHASE ---
     cjne a, #5, PC_Done
-    ; Mode: Maintenance (Low Power)
     jb reflow_temp_reached, PC_Done
     sjmp Set_20_Percent_Power
 
 PC_Done:
     ret
-
-; --- Power Helpers ---
 
 Set_Max_Power:
     ; Load 1500 (0x05DC) = 100% Duty Cycle
@@ -2673,7 +2617,6 @@ Set_20_Percent_Power:
     mov power_output+2, #0
     mov power_output+3, #0
     ret
-
 ;--------------------------------------------------------------
 ; set servo angle according to the state
 ; call servo control function every 1ms
@@ -2736,7 +2679,6 @@ run_servo_control:
 	lcall servo_control
 	ret
 
-
 ;---------------------------------------------------------------
 ; servo control
 ; generate a 20 ms period pwm signal to control the servo motor
@@ -2789,6 +2731,51 @@ servo_control_done:
 ; Determine the power output based on current state and current temperature 
 ; input parameter: Control_FSM_state
 ;-------------------------------------------------------------------------------
+; Update LED indicators based on power_output
+; 0%  -> all off
+; <50% -> LED_LEFT on
+; 50%-99% -> LED_LEFT + LED_MID on
+; >=100% -> LED_LEFT + LED_MID + LED_RIGHT on
+Update_Power_LEDs:
+    ; Check for exact 0 (all bytes zero)
+    mov a, power_output
+    orl a, power_output+1
+    orl a, power_output+2
+    orl a, power_output+3
+    jz power_leds_low
+
+    mov x, power_output
+    mov x+1, power_output+1
+    mov x+2, power_output+2
+    mov x+3, power_output+3
+
+    Load_Y(HALF_POWER)
+    lcall x_lt_y
+    jb mf, power_leds_low
+
+    Load_Y(MAX_POWER)
+    lcall x_lt_y
+    jb mf, power_leds_mid
+
+    sjmp power_leds_high
+
+power_leds_low:
+    clr  LED_LEFT
+    clr  LED_MID
+    clr  LED_RIGHT
+    ret
+
+power_leds_mid:
+    setb LED_LEFT
+    setb LED_MID
+    clr  LED_RIGHT
+    ret
+
+power_leds_high:
+    setb LED_LEFT
+    setb LED_MID
+    setb LED_RIGHT
+    ret
 
 proportional_power_control:
 	mov a, Control_FSM_state
