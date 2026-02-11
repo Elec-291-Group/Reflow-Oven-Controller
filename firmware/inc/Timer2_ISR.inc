@@ -34,12 +34,11 @@ Timer2_ISR:
     setb one_ms_pwm_flag 
 	setb one_ms_buzz_flag
     setb one_ms_beep_flag
-
+    setb one_millisecond_flag_servo
+  
     inc PB0_DEB_timer
     inc PB2_DEB_timer
     inc BTN_DEB_timer
-    setb one_ms_beep_flag
-    setb one_millisecond_flag_servo
 
     ; --- 2. NEW: Non-Blocking Delay Counters ---
     ; A. BUTTON DELAY
