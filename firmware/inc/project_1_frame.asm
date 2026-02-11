@@ -41,10 +41,9 @@ x:      ds  4
 y:      ds  4
 bcd:    ds  5
 
-; -------- UART RX line buffer (polling) --------
+; -------- UART RX state (polling) --------
 rx_idx:    ds 1
 rx_ready:  ds 1
-rx_buf:    ds 40    ; null-terminated command line
 
 
 current_temp: ds 4 ;
@@ -91,6 +90,8 @@ Buf_Soak_Temp: ds 4
 Buf_Soak_Time: ds 5   
 Buf_Refl_Temp: ds 4   
 Buf_Refl_Time: ds 5
+; UART RX line buffer (polling) in upper RAM
+rx_buf:    ds 40    ; null-terminated command line
 
 
 
@@ -322,6 +323,7 @@ Serial_RX_Pump:
 rxp_more:
     lcall getchar_nb
     jnc rxp_done          ; no new byte
+    mov B, A              ; save received byte
 
     ; ignore CR
     cjne A, #0DH, rxp_not_cr
@@ -351,7 +353,8 @@ rxp_ok:
     mov A, rx_idx
     add A, #rx_buf
     mov R0, A
-    mov @R0, ACC
+    mov A, B
+    mov @R0, A
     inc rx_idx
     sjmp rxp_more
 
