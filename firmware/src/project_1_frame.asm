@@ -149,6 +149,7 @@ PWM_PERIOD     EQU 1499 ; 1.5s period
 SOUND_OUT      EQU P1.5 ; Pin connected to the speaker
 
 PWM_OUT        EQU P1.3 ; Pin connected to the ssr for outputing pwm signal
+DC_OUT         EQU P4.0
 
 ; These 'equ' must match the wiring between the DE10Lite board and the LCD
 ; P0 is in connector JPIO.
@@ -1273,6 +1274,8 @@ Reset_Delay_Inner:
     ; P3.4/3.3/3.2 (LEDs) are Out (1).
     ; Binary: 01011100 -> Hex: 0x5C
     mov P3MOD, #01011100B
+    ; P4.0 used for dc output
+    mov P4MOD, #00000001B
     ; Turn off all the LEDs
     mov LEDRA, #0 ; LEDRA is bit addressable
     mov LEDRB, #0 ; LEDRB is NOT bit addresable
@@ -1318,6 +1321,8 @@ Reset_Delay_Inner:
     clr cooling_temp_reached
     clr state_change_signal
     clr one_millisecond_flag_servo
+    clr DC_OUT
+
     
     setb state_change_signal
 
@@ -1414,6 +1419,8 @@ Skip_Beep_Sync:
 	lcall Beep_Task
     ; Update the pwm output for the servo
     lcall call_servo_control
+    ; Update the output for the dc motor
+    lcall dc_control
     ; After initialization the program stays in this 'forever' loop
     ljmp loop
 ;-------------------------------------------------------------------------------;
@@ -2199,6 +2206,61 @@ servo_control_done:
 	pop acc
 	ret
 
+;------------------------------------------------------------------------------
+; dc_control
+; turns on the dc motor in cooling stage
+;------------------------------------------------------------------------------
+dc_control:
+    mov a, Control_FSM_state
+	
+	; handle state 0
+	cjne a, #0, dc_state1
+	clr DC_OUT
+    sjmp dc_control_done
+
+	; handle state 1
+	dc_state1:
+	cjne a, #1, dc_state2
+	clr DC_OUT
+    sjmp dc_control_done
+
+	; handle state 2
+	dc_state2:
+	cjne a, #2, dc_state3
+	clr DC_OUT
+    sjmp dc_control_done
+
+	; handle state 3
+	dc_state3:
+	cjne a, #3, dc_state4
+	clr DC_OUT
+    sjmp dc_control_done
+
+	; handle state 4
+	dc_state4:
+	cjne a, #4, dc_state5
+	clr DC_OUT
+    sjmp dc_control_done
+
+	; handle state 5
+	dc_state5:
+	cjne a, #5, dc_state6
+	clr DC_OUT
+    sjmp dc_control_done
+
+	; handle state 6
+	dc_state6:
+    cjne a, #6, dc_state7
+	setb DC_OUT
+    sjmp dc_control_done
+
+	; handle state 7
+	dc_state7:
+	clr DC_OUT  
+
+dc_control_done:
+    ret
+ 
 ;-------------------------------------------------------------------------------
 ; power_control
 ;-------------------------------------------------------------------------------
