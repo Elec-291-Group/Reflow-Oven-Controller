@@ -606,8 +606,6 @@ class ReflowGUI:
 
         self.sm.send_lines([
     "RUN:0",
-    "LCD:HOME",
-    "MENU:EXIT",
 
     # send buffer text first
     f"S:{s_temp}",

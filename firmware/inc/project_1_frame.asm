@@ -595,6 +595,7 @@ RUN_1:
     setb state_change_signal
     setb tc_startup_window
     clr  tc_missing_abort
+    setb PB0_flag
     ljmp spl_done
 
 
@@ -1460,12 +1461,18 @@ Control_FSM_state0_a:
 	
 Control_FSM_state0:
     cjne a, #0, Control_FSM_state1
+    jb PB0_flag, Control_FSM_start_from_uart
     jb P1.0, Control_FSM_done_bridge ; If Button High (Not Pressed), Exit
     lcall Wait_For_P1_0_Release      ; If Low (Pressed), Wait & Proceed
     sjmp Control_FSM_state1_a  
     
 Control_FSM_done_bridge:
     ret
+
+Control_FSM_start_from_uart:
+    clr PB0_flag
+    mov Control_FSM_state, #1
+    sjmp Control_FSM_state2_a
 
 Control_FSM_state1_a:
     inc Control_FSM_state
