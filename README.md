@@ -8,7 +8,7 @@ A sophisticated Oven Reflow Soldering Controller implemented entirely in **8052 
 * **Cooperative Multitasking**: Uses a high-speed main loop to poll multiple Finite State Machines (FSMs), ensuring that temperature sensing, UI updates, and safety checks happen concurrently without blocking the processor.
 * **Pub-Sub Interaction Pattern**: Utilizes bit-addressable memory (BSEG) as a "signal bus." Modules "publish" status flags (e.g., temperature reached, emergency stop), and independent "subscriber" modules (like the PWM driver or Buzzer) react to these signals.
 * **Non-Blocking I/O**: Implements a `Serial_RX_Pump` and state-machine-based debouncing (`PBx_DEB`) to ensure the system remains responsive to user input at all times.
-* ![Reflow FSM Diagram]("D:\下载\Oven Controller Software Architecture (2).png")
+<img width="3076" height="2907" alt="Oven Controller Software Architecture (2)" src="https://github.com/user-attachments/assets/35551a3b-3328-489a-a529-eefad7f90939" />
 
 ## 🚀 Key Features
 
